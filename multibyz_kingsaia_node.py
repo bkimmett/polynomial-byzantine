@@ -8,11 +8,16 @@ import multibyz_kingsaia_network as MessageHandler
 #getting an error with the above line? 'pip install kombu'
 from enum import Enum
 #getting an error with the above line? 'pip install enum34'
+from blist import blist, btuple, sortedlist
+#getting an error with the above line? 'pip install blist'
 
 #debug logging
 
 debug_rb = True
 debug_byz = True
+
+
+#TODO: Modified-Bracha as written down has flaw - Case C branch never taken, coin toss value isn't listened to, which would make this algorithm deterministic (impossible)
 
 
 #some concerns:
@@ -248,7 +253,7 @@ class ByzantineAgreement:
 		
 	#TODO: Add a method for list removal later.
 
-	def __init__(self,byzID,byzValue,epochConst=1):
+	def __init__(self,byzID,byzValue,epochConst=1,iterConst=2):
 		self.ID = byzID
 		#TODO: Split what happens next by if the Value is True/False (a single-valued byzantine) or something else (a multi-valued byzantine).
 		self.value = (byzValue,) #a tuple!
@@ -256,10 +261,13 @@ class ByzantineAgreement:
 		#ASSUMPTION: For now, value should be True or False: a single-valued byzantine thing.
 		
 		self.epoch = 1 #epoch = 1 to maxEpochs. If a reset occurs, we start at maxEpochs+1, +2, +3, etc.
-		self.heldMessages = {'epoch':[], 'iteration':[], 'wave':[]}
+		self.heldMessages = {'epoch':{}, 'iteration':{}, 'wave':{2:sortedlist(key=lambda x: x[0]), 3:sortedlist(key=lambda x: x[0])}}
+		
+		self.decided = False
+		self.decision = None
 		
 		
-		self.nodes = getAllNodes() #expecting a tuple of node IDs to be returned. This is never edited after.
+		self.nodes = blist(getAllNodes()) #expecting a tuple of node IDs to be returned. This is never edited after.
 		
 		self.num_nodes = len(self.nodes)
 		self.fault_bound = floor((self.num_nodes-1)/3) #n >= 3t+1  - this variable is 't'
@@ -279,9 +287,11 @@ class ByzantineAgreement:
 		
 	
 	def _reset(self):
+		if self.decided: #inactive after decision
+			return 
 		self.value = copy.deepcopy(self.origValue) #reset value to start.
 		#TODO: Does reset() need to reset the node's initial value? This code assumes 'yes'. Otherwise, delete the above line.
-		self.goodNodes = list(self.nodes) #reset whitelist
+		self.goodNodes = blist(self.nodes) #reset whitelist
 		self.badNodes = [] #we need this to validate messages from other nodes 
 		self.scores = [0 for node in self.nodes] #reset list of scores
 		
@@ -296,12 +306,29 @@ class ByzantineAgreement:
 		#this handler will trigger bracha next wave if necessary.
 	
 	def _startEpoch():
+		if self.decided: #inactive after decision
+			return 
+		if self.epoch > self.maxEpochs:
+			#wut-oh. Reset!	
+			#TODO
+			return
+			
 		##### VERY IMPORTANT: We are assuming that there are exactly n iterations in an epoch. The original paper has m = Big-Theta(n) as the limit instead, and later on suggests m >= n for statistical analysis to work. What's the REAL max value of M?
 		self.iteration = 1
+		self.clearHeldIterMessages()
+		
 		_startBracha()
 		
 	def _startBracha():
-		self.wave = 1
+		if self.decided: #inactive after decision
+			return 
+		if self.iteration > self.maxIterations: #nvm, start a new EPOCH instead
+			#TODO: call process epoch
+			self._processEpoch()
+			self.epoch += 1
+			self._startEpoch()
+			return	
+		#starts an iteration.
 		self.brachabits = {node: (True, None, None, None) for node in self.goodNodes}
 		self.brachabits.update({node: (False, None, None, None) for node in self.badNodes})
 		#above is message storage for validation purposes
@@ -310,9 +337,9 @@ class ByzantineAgreement:
 		#but that proposes a breakdown of some sort earlier, as node names REALLY SHOULD be unique.
 		self.brachaMsgCtrGood = [[0,0],[0,0],[0,0]]
 		self.brachaMsgCtrTotal = [[0,0],[0,0],[0,0]]
-		self.brachaMsgCtrGoodDeciding = [[0,0]]
+		self.brachaMsgCtrGoodDeciding = [0,0]
 		#these are counters. They count the total number of verified messages with their value of False [0] and True [0], for each of waves 1, 2, 3.
-		#the third counter counts only the verified messages from good nodes that have 
+		#the third counter counts only the verified messages from good nodes that have indicated they are ready to decide.
 		
 		#aka Bracha Wave 1
 		ReliableBroadcast.broadcast((MessageMode.bracha, 1, self.value),extraMeta=(self.ID,self.epoch,self.iteration)):
@@ -322,9 +349,18 @@ class ByzantineAgreement:
 			self.brachaMsgCtrGood[0][1 if self.value else 0] += 1
 		self.brachaMsgCtrTotal[0][1 if self.value else 0] += 1
 		
+		#after we send our own message, we might as well check to see if there's any messages waiting.
+		if self.iteration == 1:
+			self.checkHeldEpochMessages(self.epoch)
+		else:
+			self.checkHeldIterMessages(self.iteration)
+		self.wave = 1
+		self.clearHeldWaveMessages()
 		
 		
-	def validateBrachaMsg(message):
+	def validateBrachaMsg(message):	
+		if self.decided: #inactive after decision
+			return 
 		#TODO: Better validation of bracha-style messages.
 		try:
 			extraMeta = message['meta']['rbid'][2]
@@ -375,7 +411,7 @@ class ByzantineAgreement:
 				return #wave can only be one, two, or three. period.
 			
 			msgValue = message['body'][2]
-			if not isinstance(msgValue, tuple) or length(msgValue) > 2 or not all(type(item) is bool for item in items) or length(msgValue) == 0:
+			if not isinstance(msgValue, tuple) or (length(msgValue) not in [1,2]) or not all(type(item) is bool for item in items):
 				#must be a tuple of 1 or 2 items. First item is value. Second item is wave 3 'decide' flag. Decide flag is ignored if it's a wave1/wave2 message.
 				if debug_byz:
 					print "Throwing out impossible bracha message from {}, invalid message type {}.".format(message['sender'],type(msgValue))
@@ -386,6 +422,11 @@ class ByzantineAgreement:
 				print "Value error. Message from {} had to be discarded.".format(message['sender'])
 			return 
 			
+		#unpack msgValue	
+		if wave == 3:
+			msgDecide = msgValue[1]
+		msgValue = msgValue[0]
+		
 		
 		#validating time! 
 		
@@ -400,7 +441,7 @@ class ByzantineAgreement:
 					#...but we COULD hit it later.
 					if debug_byz:
 						print "Holding uncertain wave 2 bracha message from {}, might not have enough wave 1 messages to validate {}.".format(message['sender'],msgValue)
-					self.holdForLaterWave(message)
+					self.holdForLaterWave(message, 2, self.initial_validation_bound - self.brachaMsgCtrTotal[0][1 if msgValue else 0])
 				else:
 					#...and we're not going to be able to hit it in this go-round.
 					if debug_byz:
@@ -412,14 +453,25 @@ class ByzantineAgreement:
 			#this is complicated somewhat by the fact that n - t >= 2t + 1. So the number of values we need for a 'majority' is actually (n - t) // 2 + 1. Or, about t+1. So it's possible for enough wave 1 messages to come in that wave 2 messages taking either position are viable.
 		elif wave == 3:
 			#wave 3 messages are more straightforward to validate - more than half of the nodes have to have settled to a pattern. This is quite unequivocal. 
-			if self.brachaMsgCtrTotal[1][1 if msgValue else 0] <= self.num_nodes // 2:
+			if not msgDecide:
+				if msgValue != self.brachabits[message['sender']][2] or self.brachaMsgCtrTotal[1][1 if msgValue else 0] >= self.num_nodes // 2 + self.fault_bound + 1:
+					#basically, if 'decide' is false, two things must be true:
+					#1. The node must have the same value as its Wave 2 message.
+					#2A. There must not be more than n//2 + t nodes that have a specific value in their wave 2 message, as if there were, such a hypermajority would force the node to set 'decide' to true and their value to that value.
+					#2B. This second condition is hard to hit as it requires this node receive more than n - t messages, but I'm including it just in case as it is a condition to check for.
+					if debug_byz:
+						print "Discarding unvalidateable wave 3 bracha message from {}, sender is not deciding and {} {}.".format(message['sender'], "changed value to" if msgValue != self.brachabits[message['sender']][2] else "would be forced to decide", msgValue)
+					#TODO: Maybe blacklist here?
+					return
+			
+			if msgDecide and self.brachaMsgCtrTotal[1][1 if msgValue else 0] <= self.num_nodes // 2:
 				#message isn't valid - we haven't received enough appropriate wave 2 messages.
 				#we hold the message if there is the *potential* for there to be enough wave 1 messages. Otherwise we throw it out.
 				if self.num_nodes - sum(self.brachaMsgCtrTotal[1]) + self.brachaMsgCtrTotal[1][1 if msgValue else 0] > self.num_nodes // 2:
 					#...but we COULD hit it later.
 					if debug_byz:
 						print "Holding uncertain wave 3 bracha message from {}, might not have enough wave 2 messages to validate {}.".format(message['sender'],msgValue)
-					self.holdForLaterWave(message)
+					self.holdForLaterWave(message, 3, (self.num_nodes // 2 + 1) - self.brachaMsgCtrTotal[1][1 if msgValue else 0]) #second number is minimum number of messages needed before recheck 
 				else:
 					#...and we're not going to be able to hit it in this go-round.
 					if debug_byz:
@@ -441,16 +493,27 @@ class ByzantineAgreement:
 				self.brachabits[message['sender']][wave] = msgValue
 				if self.brachabits[message['sender']][0]: #that is, if the node is deemed Good
 					self.brachaMsgCtrGood[wave-1][1 if msgValue else 0] += 1
+					if self.wave == 3:
+						self.brachaMsgCtrGoodDeciding[1 if msgValue else 0] += 1
 				self.brachaMsgCtrTotal[wave-1][1 if msgValue else 0] += 1 
+				
 				if self.wave == 1 and sum(self.brachaMsgCtrGood[0]) >= self.num_nodes - self.fault_bound:
 					self.wave = 2
 					self._brachaWaveTwo()
-				if self.wave == 2 and sum(self.brachaMsgCtrGood[1]) >= self.num_nodes - self.fault_bound:
-					self.wave = 3
-					self._brachaWaveThree()
-				if self.wave == 3 and sum(self.brachaMsgCtrGood[2]) >= self.num_nodes - self.fault_bound:
-					self.wave = 4 #done with waves - mostly acts to prevent this from firing again
-					self._brachaFinal()
+				if self.wave == 2:
+					if sum(self.brachaMsgCtrGood[1]) >= self.num_nodes - self.fault_bound:
+						self.wave = 3
+						self._brachaWaveThree()
+						
+					checkHeldWaveMessages(2)
+					#check wave messages
+				if self.wave == 3:
+					if sum(self.brachaMsgCtrGood[2]) >= self.num_nodes - self.fault_bound:
+						self.wave = 4 #done with waves - mostly acts to prevent this from firing again
+						self._brachaFinal()
+				
+					checkHeldWaveMessages(3)
+					#check wave messages - happens after potential wave update to ensure quasi-atomicity
 				
 				#increment counters 
 				#TODO: Release held stage 2 or 3 messages if we have enough stage 1/2 messages.
@@ -468,22 +531,62 @@ class ByzantineAgreement:
 		#is it possible to blacklist ourselves?
 		pass	
 		
-	def holdForLaterEpoch(message):
+		#self.heldMessages = {'epoch':{}, 'iteration':{}, 'wave':{}}
+		
+	def holdForLaterEpoch(message, target_epoch):
 		#saving a message until later. Fish saved messages out with checkHeldMessages.
-		#maybe split this into holding for different reasons?
-		self.heldMessages['epoch'].append(message)
+
+		if target_epoch not in self.heldMessages['epoch']:
+			self.heldMessages['epoch'][target_epoch] = blist()
+		self.heldMessages['epoch'][target_epoch].append(message)
 	
-	def holdForLaterIteration(message):
+	def holdForLaterIteration(message, target_iter):
 		#saving a message until later. Fish saved messages out with checkHeldMessages.
-		#maybe split this into holding for different reasons?
-		self.heldMessages['iteration'].append(message)
+
+		if target_iter not in self.heldMessages['epoch']:
+			self.heldMessages['epoch'][target_iter] = blist()
+		self.heldMessages['iteration'][target_iter].append(message)
 	
-	def holdForLaterWave(message):
+	def holdForLaterWave(message, wave, number_messages_needed):
 		#saving a message until later. Fish saved messages out with checkHeldMessages.
-		#maybe split this into holding for different reasons?
-		self.heldMessages['wave'].append(message)
+		self.heldMessages['wave'][wave].add( (sum(self.brachaMsgCtrTotal[wave-1])+number_messages_needed, message) )
+		#the 'number_messages_needed' at the front - this number will only go DOWN as we receive more wave2/wave3 messages. (this works because held wave messages are wiped at the start of a new iteration) So the list is sorted in reverse order of the number of messages needed, and when we get a new message we just have to check the number of messages received and we're fine.
+		
+		#so we're putting (total messages received so far) + (num messages needed) at the front of each message. And when (total messages received) is >= that number, you pop the message.
+		
 	
-	def checkHeldMessages():
+	def checkHeldEpochMessages(target_epoch):
+		if target_epoch not in self.heldMessages['epoch']:
+			return
+			
+		for message in self.heldMessages['epoch'][target_epoch]:
+			self.validatebrachaMsg(message)
+			#messages will never return here. They either go into the iteration or wave hold buckets, get processed, or get discarded.
+		
+		del self.heldMessages['epoch'][target_epoch]
+		
+	def checkHeldIterMessages(target_iter):
+		if target_iter not in self.heldMessages['iteration']:
+			return
+			
+		for message in self.heldMessages['iteration'][target_iter]:
+			self.validatebrachaMsg(message)
+			#again, messages will never return here - same reason.
+		
+		del self.heldMessages['iteration'][target_iter]
+	
+	def checkHeldWaveMessages(wave): #check function signature of this
+		#TODO: This doesn't work. Messages can get put back in the late-wave bucket because the number of messages needed is just a minimum.
+		while len(self.heldMessages['wave'][wave]) > 0:
+			if self.heldMessages['wave'][wave][-1][0] <= sum(self.brachaMsgCtrTotal[wave-1]:
+				#this pulls out the message with the lowest # of messages (0) stored for the current wave held list (self.heldMessages['wave'][wave]) and checks its message counter [0] to see if we've received that many messages of the previous wave. If so, we reprocess it and repeat.
+				message = self.heldMessages['wave'][wave].pop(0)[1]
+				self.validatebrachaMsg(message)
+			else:
+				#otherwise, we end this while loop.
+				break	
+			
+		
 		#we can shortcut a lot of this by considering reasons messages are held:
 		#future epoch
 			#refresh: on new epoch (can check by number)
@@ -491,20 +594,28 @@ class ByzantineAgreement:
 			#refresh: on new iteration (ditto)
 		#wave with not enough validated messages to pass on
 			#refresh: on receiving a new message of the previous wave, or at least enough messages of the previous wave
-		#?????
+		#This function goes through the message held list in order and feeds it to the validator one by one. We stop when we reach where the end of the message held list was when we started. Then we take only the new bit and it becomes the held messages queue.
+
 	
-		#TODO: Make this function, which goes through the message held list in order and feeds it to the validator one by one. We stop when we reach where the end of the message held list was when we started. Then we take only the new bit and it becomes the held messages queue.
-		pass
-		#TODO: When to call it, though? Suggestions:
-		#after an iteration change
-		#after an epoch change 
-		#after a wave change?
+		
+	def clearHeldEpochMessages():
+		#called on reset. 
+		self.heldMessages['epoch'] = {}
+		
+	def clearHeldIterMessages():
+		#called on new epoch. 
+		self.heldMessages['wave'] = {}
+		
+	def clearHeldWaveMessages():
+		#called on new iteration. 
+		self.heldMessages['wave'] = {2:sortedlist(key=lambda x: x[0]), 3:sortedlist(key=lambda x: x[0])}
+		
 	
 	def _brachaWaveTwo():
 		if self.brachaMsgCtrGood[0][0] > self.brachaMsgCtrGood[0][1]:
 			self.value = (False,)
 		if self.brachaMsgCtrGood[0][0] < self.brachaMsgCtrGood[0][1]:
-			self.value = (False,)
+			self.value = (True,)
 		#if they are equal, we stay where we are.
 		
 		#Bracha Wave 2
@@ -513,32 +624,58 @@ class ByzantineAgreement:
 		self.brachabits['username'][2] = self.value
 		
 		if self.brachabits['username'][0]: #if we're a good node:
-			self.brachaMsgCtrGood[1][1 if self.value else 0] += 1
-		self.brachaMsgCtrTotal[1][1 if self.value else 0] += 1
+			self.brachaMsgCtrGood[1][1 if self.value[0] else 0] += 1
+		self.brachaMsgCtrTotal[1][1 if self.value[0] else 0] += 1
 		#TODO: IMPORTANT - Broadcast SHOULD loop back, but if it does not, we need to call ValidateMessage manually. This could the last received message needed to advance to another wave...!
 		
 	
 	def _brachaWaveThree():
 		if self.brachaMsgCtrGood[0][0] > self.num_nodes // 2:
-			self.value = (False,True)
-		if self.brachaMsgCtrGood[0][1] > self.num_nodes // 2:
+			self.value = (False,True) #decide
+		elif self.brachaMsgCtrGood[0][1] > self.num_nodes // 2:
 			self.value = (True,True) #decide
+		else:
+			self.value = (self.value[0],False) #no decide
 		
 		#Bracha Wave 2
 		ReliableBroadcast.broadcast((MessageMode.bracha, 3, self.value),extraMeta=(self.ID,self.epoch,self.iteration)):
 		#also, count myself (free).
-		self.brachabits['username'][3] = self.value
+		self.brachabits['username'][3] = self.value[0]
 
 		if self.brachabits['username'][0]: #if we're a good node:
-			self.brachaMsgCtrGood[2][1 if self.value else 0] += 1
+			self.brachaMsgCtrGood[2][1 if self.value[0] else 0] += 1
+			if self.value[1]:
+				self.brachaMsgCtrGoodDeciding[1 if self.value[0] else 0] += 1
 		self.brachaMsgCtrTotal[2][1 if self.value else 0] += 1
 		
 	
 	def _brachaFinal():
+		#find maximum number of decider messages. Is it 0 or 1?
+		num_deciding_messages = max(self.brachaMsgCtrGoodDeciding)
+		deciding_value = self.brachaMsgCtrGoodDeciding.index(num_deciding_messages)
+		deciding_equal = (self.brachaMsgCtrGoodDeciding[0] == self.brachaMsgCtrGoodDeciding[1])
 	
-	
-	
-	
+		if num_deciding_messages >= self.num_nodes - self.fault_bound:
+			self.decided = True
+			self.decision = True if deciding_value == 1 else False
+			
+			
+			return
+		elif num_deciding_messages > self.fault_bound:
+			self.globalCoin()
+			if not deciding_equal:
+				self.value = (True if deciding_value == 1 else False,)
+			else:
+				self.value = (self.value[0],) #tie result, value carries over
+			#run coin, discard value, new iteration
+			self.iteration += 1
+			self._startBracha()
+		else: 
+			self.value = (self.globalCoin(),)
+			#run coin, set value, cycle
+			self.iteration += 1
+			self._startBracha()
+			
 		
 	
 		
