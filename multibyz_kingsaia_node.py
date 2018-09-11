@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 from __future__ import division
-from sys import argv
+from sys import argv, exit
 from time import sleep
 from math import floor
 import multibyz_kingsaia_network as MessageHandler
@@ -16,6 +16,8 @@ from blist import blist, btuple, sortedlist
 debug_rb = True
 debug_byz = True
 
+
+#TODO: I'm using message[sender] for a lot of RB-released messages. The thing is, [sender] is the node that sent the message the 'last mile'. rbid[0] is the real sender. FIX THIS!!!
 
 #TODO: Modified-Bracha as written down has flaw - Case C branch never taken, coin toss value isn't listened to, which would make this algorithm deterministic (impossible)
 
@@ -110,21 +112,24 @@ class ReliableBroadcast:
 	
 	
 	@classmethod
-	def handleRBroadcast(thisClass,message):
+	def handleRBroadcast(thisClass,message,checkCoinboardMessages=True): #when a coinboard message is released from being held, the release function will call handleRBroadcast but set the extra argument to false. This skips having it checked again. Everyone else: don't use this argument for anything.
 		
 		#new message format = 
 		
 		#{'body': message.decode(), 'type': message.headers.type, 'sender': message.headers.sender, 'meta': message.headers.meta}
 		
 		#meta format: {'phase':RBPhase.initial,'rbid':(username,message_counter,extraMeta)}
-					
+				
+		#TODO: Put 'try' blocks in here in case of malformed data (no rbid, no meta, bad meta, etc)			
 		
 		sender = message['sender'] #error?: malformed data
-		data, debuginfo = message['body'] #first var is used for type, skip that
+		data = message['body'] #first var is used for type, skip that  #, debuginfo
 		phase = message['meta']['phase']
 		rbid = message['meta']['rbid'] #RBID doesn't change after it's set by the initial sender.
 		
 		data = tuple(data) #bug fix: for some reason tuples are decoded into lists upon receipt. No idea why.
+		
+		
 		
 		
 		if phase == RBPhase.initial and sender != rbid[0]:
@@ -136,6 +141,26 @@ class ReliableBroadcast:
 		#TODO: Security measure. If an Initial message says (in the UID) it is from sender A, and the sender data says it is from sender B, throw an exception based on security grounds. Maybe dump that message. Effectively, that node is acting maliciously.
 		#rev: PASSWALL
 		#This is only applicable once we move away from prototype code.
+		
+		
+		try:
+			if checkCoinboardMessages and type(data[0]) is ByzantineAgreement.MessageMode and (data[0] == ByzantineAgreement.MessageMode.coin_flip or data[0] == ByzantineAgreement.MessageMode.coin_list):
+				instance = ByzantineAgreement.getInstance(rbid[2][0]) #rbid[2][0] = extraMeta[0] = byzID
+				if not instance.checkCoinboardMessageHolding(message):
+					return #if held, stop processing for now
+				#coinboard message - possibly hold for later!
+				#coinboard messages can be held for the following reasons:
+				#GENERATE phase: IF j' (orig. sender) is not me AND message i' (flip#) > 1 AND I haven't received (n-t) acknowledgements for the message of (i'-1,j').
+					#release held when: we receive enough acknowledgements for any message() in the coinboard not from us.
+				#RESOLVE phase:	IF the list of j' has messages on it that I have not received. 
+					#release held when: we receive all messages on that list. We might want to have 'check milestones' for the biggest number of remaining messages in a list, though even then lists might cycle on the hold list a few times.
+				
+				#TODO: As a check uses i' and j' (part of the message body), this means coinboard messages need to be verified before they are accepted. WELL before.
+				#but it means coinboard messages can be accepted without verification (because they already have been). Double-edged sword.
+				#TODO: Of course, we validate anyway. And we'll do a secondary message hold when coinboard messages are accepted, because we can still get ones from early/late epochs/iterations. 
+		except Exception as err:
+			print err
+		
 		
 		uid = tuple(rbid,data) #for storage in the log
 		
@@ -261,11 +286,10 @@ class ByzantineAgreement:
 		#ASSUMPTION: For now, value should be True or False: a single-valued byzantine thing.
 		
 		self.epoch = 1 #epoch = 1 to maxEpochs. If a reset occurs, we start at maxEpochs+1, +2, +3, etc.
-		self.heldMessages = {'epoch':{}, 'iteration':{}, 'wave':{2:sortedlist(key=lambda x: x[0]), 3:sortedlist(key=lambda x: x[0])}}
+		self.heldMessages = {'epoch':{}, 'iteration':{}, 'wave':{2:sortedlist(key=lambda x: x[0]), 3:sortedlist(key=lambda x: x[0])}, 'coin_epoch':{}, 'coin_epoch_accepted':{}, 'coin_iteration':{}, 'coin_iteration_accepted':{}, 'coin_flip':{}, 'coin_list':{}}
 		
 		self.decided = False
 		self.decision = None
-		
 		
 		self.nodes = blist(getAllNodes()) #expecting a tuple of node IDs to be returned. This is never edited after.
 		
@@ -285,6 +309,7 @@ class ByzantineAgreement:
 		
 		self._startEpoch()
 		
+		
 	
 	def _reset(self):
 		if self.decided: #inactive after decision
@@ -295,7 +320,30 @@ class ByzantineAgreement:
 		self.badNodes = [] #we need this to validate messages from other nodes 
 		self.scores = [0 for node in self.nodes] #reset list of scores
 		
+		#TODO: Coinboards (but not past coinboards) should be reset on new Iteration.
+		#TODO: Check coin messages at appropriate moments!!
+		
+		self.pastCoinboards = {}
 		self.coinboard = [] #erase coin records
+		self.whitelistedCoinboardList = {}
+		self.pastWhitelistedCoinboardLists = {} #dictionary of dicts
+		
+		self.lastCoinBroadcast = 0 #what's the last message_i (of our own) we broadcast?
+		#TODO: Reset this whenever new coinboard.
+		self.coinState = 0 
+		#0 = coinboard not yet running
+		#1 = coinboard running in 'generate' phase
+		#2 = coinboard running in 'reconcile' phase
+		#3 = coinboard is over
+		#TODO: Also reset THIS at iteration with the board.
+		
+		#COINBOARD FORMAT:
+		#array of x dicts. (where x is as in x-sync - number of rounds.) Dict #i  is for round i.
+		#in each dict, keys are the j' s (usernames of nodes).
+		#each value is a tuple: (value, acks)
+		#where acks is a set() of who acks have been received from for this message.
+		
+		#past coinboards are stored by a tuple of (epoch,iteration).
 		
 		#a few notes on how the byzantine algorithm works and using fake multithreading
 		#(aka 'event-driven programming')...
@@ -305,7 +353,7 @@ class ByzantineAgreement:
 		#receiving bracha broadcast messages acts as a handler. 
 		#this handler will trigger bracha next wave if necessary.
 	
-	def _startEpoch():
+	def _startEpoch(self):
 		if self.decided: #inactive after decision
 			return 
 		if self.epoch > self.maxEpochs:
@@ -319,7 +367,7 @@ class ByzantineAgreement:
 		
 		_startBracha()
 		
-	def _startBracha():
+	def _startBracha(self):
 		if self.decided: #inactive after decision
 			return 
 		if self.iteration > self.maxIterations: #nvm, start a new EPOCH instead
@@ -358,7 +406,7 @@ class ByzantineAgreement:
 		self.clearHeldWaveMessages()
 		
 		
-	def validateBrachaMsg(message):	
+	def validateBrachaMsg(self,message):	
 		if self.decided: #inactive after decision
 			return 
 		#TODO: Better validation of bracha-style messages.
@@ -482,6 +530,9 @@ class ByzantineAgreement:
 		
 			
 		#now check that we can actually store the messages	
+		
+		#TODO: Switch check vs self.nodes to up here instead of relying on a try. Keep the try anyway.
+		
 		try:
 			if self.brachabits[message['sender']][wave] is not None:
 				if msgValue != self.brachabits[message['sender']][wave]:
@@ -525,7 +576,207 @@ class ByzantineAgreement:
 			#IMPORTANT: so we have a specific defined behavior here: **We throw out the message.** This IS the flexible-node-list resilient behavior. Why? Because the node list is set at the start of the node opening the byzantine instance. If a new node is added to the global roster, it can jump in on new byzantine instances but not ones that are already in progress!
 			return 
 		
-	def blacklistNode(sender):
+		
+	def validateCoinMsg(self.message):
+		#we still accept coinboard messages after decision... right?
+		
+		try: 
+			
+
+			#this first bit is just about the same as bracha: epoch and iteration-
+			#-except we don't throw out old coin messages. We process them like all others.		
+			#this variable determines whether it's an old coin message or not.
+			message_from_the_past = False
+			
+			##Check Epoch
+			epoch = int(extraMeta[1])
+			if epoch < self.epoch:
+				message_from_the_past = True
+			if epoch > self.epoch:
+				if debug_byz:
+					print "Holding too-new coin message from {}, epoch {} vs {}.".format(message['sender'],epoch,self.epoch)
+				self.holdAcceptedCoinForLaterEpoch(message,epoch)
+				return #this message can't be processed yet, it's from a different epoch entirely
+			
+			##Check Iteration
+			iteration = int(extraMeta[2])
+			if iteration > self.maxIterations:
+				
+				if debug_byz:
+					print "Throwing out impossible coin message from {}, iteration {} (max {}).".format(message['sender'],iteration,self.maxIterations)
+					print "This can indicate a fault or nodes that are not uniformly configured with a maximum iteration limit (or nodes that have a different node list than this node at the start of the byzantine bit)."
+				return #this can't be processed, it's from an iteration that's not supposed to happen.
+			if iteration > self.iteration:
+				if debug_byz:
+					print "Holding too-new coin message from {}, iteration {} vs {}.".format(message['sender'],iteration,self.iteration)
+				self.holdAcceptedCoinForLaterIteration(message,iteration)
+				return #this message can't be processed yet, maybe next (or some later) iteration
+			if iteration < self.iteration:
+				message_from_the_past = True
+			
+			
+				data = message['body']
+				mode = data[0]
+				
+				if(type(mode) is not MessageMode):
+					if debug_byz:
+						print "Throwing out not-a-coin message from {} (real type {}).".format(message['sender'],type(mode))
+						print "This is NOT supposed to happen - noncoin messages aren't even supposed to hit this function. Debug time!"
+					return #this can't be processed, no way no how.
+					
+		except Exception as err:
+			print err 
+			raise err
+			#TODO: build a better exception handler and handle errors properly
+			
+		if message['sender'] not in self.nodes:
+			if debug_byz:
+				print "Who sent this? Received a coin message from a node {} we don't know.".format(message['sender'])
+			return
+		
+		##Check Type
+			#if it's a flip message it got through the pre-checks and so is valid to be processed. So we tag it and (if our state is still running the board) send an acknowledgement by broadcast.
+			#if it's an acknowledgement we accept it and do a Hold Release for flips if necessary.
+			#if it's a coin list, well, it depends on our state, again.
+			
+		#message format expected:
+		#flip: i, j, value
+		#ack: i, j
+		#list: [list]	
+			
+		if mode == MessageMode.coin_flip or mode == MessageMode.coin_ack:
+			try:
+				message_i = data[1]
+				message_j = data[2]
+				if mode == MessageMode.coin_flip:
+					message_value = data[3]
+			except Exception as err:
+				print err 
+				raise err
+				#TODO: build a better exception handler and handle errors properly
+		
+			if type(message_i) is not int:
+				if debug_byz:
+					print "Invalid coinflip message from {}, sync round# type {} instead of integer.".format(message['sender'],type(message_i))
+				return
+		
+			if message_i < 1: #TODO: or message_i > ???
+				if debug_byz:
+					print "Invalid coinflip message from {}, impossible round# ().".format(message['sender'],message_i)
+				return
+		
+			if message_j not in self.nodes:
+				#By the way: there's probably a line to be had here about untrusted data, but we're assuming adversaries WILL NOT try to induce arbitrary code execution with node IDs, or anything else. 
+				#if you are reading this, and you're implementing this on a production system, you had better sanitize your inputs, 'k? I did my best, but there's no WAY I thought of everything.
+				if debug_byz:
+					print "Received a coin message about a node {} we don't know.".format(message_j)
+				return
+		
+			if mode == MessageMode.coin_flip and type(message_value) is not bool:
+				if debug_byz:
+					print "Invalid coinflip message from {}, message type {} instead of boolean.".format(message['sender'],type(message_value))
+				return
+
+			if message_from_the_past:
+				if (epoch,iteration) not in self.pastCoinboards:
+					#we don't have ANY coinboard records from back then. How'd that happen? 
+					if debug_byz:
+						print "Warning: had to generate a new past coinboard for old epoch/iter {}/{}.".format(epoch,iteration)
+					#generate a new coinboard on the spot.
+					self.pastCoinboards[(epoch,iteration)] = [{} for x in range(self.num_nodes)]
+					
+				this_coinboard = self.pastCoinboards[(epoch,iteration)]
+			else:
+				this_coinboard = self.coinboard
+				
+			while len(this_coinboard) < self.num_nodes:
+				this_coinboard.append({}) #add blank extra spaces to fill out board
+			if message_j not in this_coinboard[message_i]:
+				this_coinboard[message_i][message] = (None,set()) #setup record
+			
+			##OK, we've done some light validation, now store it.
+			
+			if mode == MessageMode.coin_flip:
+				if message_j != rbid[0]: #sender doesn't match who the message is about, i.e. this is a forgery or a screw-up of grand proportions
+					if debug_byz:
+						print "{} tried to forge {}'s coin flip message. Discarding/blacklisting.".format(rbid[0],message_j)
+					self.blacklistNode(rbid[0])
+					return
+			
+				if this_coinboard[message_i][message_j][0] is None:
+					#no value stored
+					this_coinboard[message_i][message_j][0] = message_value
+					if not message_from_the_past and self.coinState < 2:
+						self._acknowledgeCoin(message_i,message_j)
+						#Broadcast acknowledgement that we received this message - but only if this is the current coinboard and we haven't sent our own list yet.
+						#TODO: 
+				else:
+					if message_value != this_coinboard[message_i][message_j][0]:
+						#We have two messages with different values? This isn't supposed to happen. Blacklist the node...
+						if debug_byz:
+							print "{} sent the same flip twice, with two different values. Discarding/blacklisting.".format(rbid[0])
+						self.blacklistNode(rbid[0])
+						
+						return
+						
+			
+			if mode == MessageMode.coin_ack:
+				this_coinboard[message_i][message_j][1].append(rbid[0]) #sender of broadcast
+				#Check number of acknowledgements.
+				if this_coinboard[message_i][message_j][1] == self.num_nodes-self.fault_bound:
+					#we've hit the boundary number of acknowledgements! (n-t)
+					#we trigger this only once - it does thing like continue the state.				
+					if message_j == username:
+						#if we reach the set number for our flip, broadcast the next flip.
+						if not message_from_the_past:	
+							#this does assume it's OUR flip NOW, mind you. If we've gotten all the acknowledgements finally for an old coinboard, then the decision is already made and there's no point updating it further.				
+							if message_i != self.lastCoinBroadcast:
+								if debug_byz:
+									print "SERIOUS ERROR: OK, so we received the correct number of acknowledgements for one of our {} coin flips, and not the one we just broadcast {} vs {}. This SHOULD be completely impossible without time travel, glitch, or forgery on a grand scale. ".format("earlier" if message_i < self.coinBroadcast)
+								#TODO: But do we DO anything about it?
+							else:
+								self.lastCoinBroadcast += 1
+								if self.lastCoinBroadcast < self.num_nodes:
+									coin = self._broadcastCoin(self.lastCoinBroadcast)
+									##TODO: This can never happen while the coinboard is undefined, right?
+									self.coinboard[self.lastCoinBroadcast][username] = [coin,set()] #TODO: Should this be a sortedset()?
+									#this will overwrite any acks that were already there, but... yeah, how could acks arrive if the coin hadn't been broadcast yet?! Not a concern.		
+									self.coinboard[self.lastCoinBroadcast][username][1].append(username) #acknowledge receipt of our own message.
+					else:
+						#if we reach the set number for someone else's flip, release reliable broadcast for the next in the series, if it exists.
+						#we do this EVEN IN THE CASE OF IT BEING IN THE PAST.
+						checkHeldCoinFlipMessages(message_i, message_j, searchEpoch=epoch, searchIteration=iteration)
+					
+					if not message_from_the_past and self.coinState < 2:
+						
+				
+				#we also (if we're in Stage 1) need to check for the number of acknowledgements - if we get enough columns, we move on to stage 2. (If we're in Stage 0, we store that we're ready to move on until Stage 1...)
+				#a question: do we always broadcast next flip FIRST or check for while loop first?
+
+		
+		elif mode == MessageMode.coin_list:
+			pass
+			#TODO: This needs doing, too.
+		
+		else:
+			if debug_byz:
+				print "Throwing out bracha or some other type of noncoin message from {}.".format(message['sender'])
+				print "This is NOT supposed to happen - noncoin messages aren't even supposed to hit this function. Debug time!"
+			return #this can't be processed, no way no how.
+	
+	
+	def _broadcastCoin(self,message_i):
+		global username, random_generator
+		flip = (random_generator.random() >= .5) #True if >= .5, otherwise False. A coin toss.
+		ReliableBroadcast.broadcast((MessageMode.coin_flip, message_i, username, ),extraMeta=(self.ID,self.epoch,self.iteration))
+		
+		return flip #so we can use it too
+		
+	def _acknowledgeCoin(self,message_i,message_j):
+		ReliableBroadcast.broadcast((MessageMode.coin_ack, message_i, message_j),extraMeta=(self.ID,self.epoch,self.iteration))	
+		
+		
+	def blacklistNode(self,sender):
 		#TODO: implement this.
 		#if we blacklist more than t nodes, we have a serious problem. What do we do then?
 		#is it possible to blacklist ourselves?
@@ -540,7 +791,7 @@ class ByzantineAgreement:
 			self.heldMessages['epoch'][target_epoch] = blist()
 		self.heldMessages['epoch'][target_epoch].append(message)
 	
-	def holdForLaterIteration(message, target_iter):
+	def holdForLaterIteration(self,message, target_iter):
 		#saving a message until later. Fish saved messages out with checkHeldMessages.
 
 		if target_iter not in self.heldMessages['epoch']:
@@ -554,8 +805,46 @@ class ByzantineAgreement:
 		
 		#so we're putting (total messages received so far) + (num messages needed) at the front of each message. And when (total messages received) is >= that number, you pop the message.
 		
+	def holdCoinForLaterEpoch(message,target_epoch):
+		#We store coin messages separately from bracha messages because they are processed differently when fishing them out.	
+		
+		if target_epoch not in self.heldMessages['coin_epoch']:
+			self.heldMessages['coin_epoch'][target_epoch] = blist()
+		self.heldMessages['coin_epoch'][target_epoch].append(message)
+		
+	def holdAcceptedCoinForLaterEpoch(self,message,target_epoch):
+		#We store coin messages separately from bracha messages because they are processed differently when fishing them out.	
+		
+		if target_epoch not in self.heldMessages['coin_epoch_accepted']:
+			self.heldMessages['coin_epoch_accepted'][target_epoch] = blist()
+		self.heldMessages['coin_epoch_accepted'][target_epoch].append(message)
+		
+	def holdCoinForLaterIteration(message,target_iter):
+		if target_iter not in self.heldMessages['coin_iteration']:
+			self.heldMessages['coin_iteration'][target_iter] = blist()
+		self.heldMessages['coin_iteration'][target_iter].append(message)
+		
+	def holdAcceptedCoinForLaterIteration(message,target_iter):
+		if target_iter not in self.heldMessages['coin_iteration_accepted']:
+			self.heldMessages['coin_iteration_accepted'][target_iter] = blist()
+		self.heldMessages['coin_iteration_accepted'][target_iter].append(message)
+		
+	def holdCoinForSufficientAcks(self,message,message_i,message_j):
+		
+		if (self.epoch,self.iteration) not in self.heldMessages['coin_flip']:
+			self.heldMessages['coin_flip'][(self.epoch,self.iteration)] = {}
+			
+		
+		if (message_i,message_j) not in self.heldMessages['coin_flip'][(self.epoch,self.iteration)]:
+			self.heldMessages['coin_flip'][(self.epoch,self.iteration)][(message_i,message_j)] = blist()
+		#multiple messages can be stored under the same i,j - reliable broadcast creates many copies!
+		self.heldMessages['coin_flip'](self.epoch,self.iteration)][(message_i,message_j)].append(message)
+		
+	def holdCoinListForLater(message,list,differences):
+		pass
+		#TODO: Implement this.	
 	
-	def checkHeldEpochMessages(target_epoch):
+	def checkHeldEpochMessages(self,target_epoch):
 		if target_epoch not in self.heldMessages['epoch']:
 			return
 			
@@ -565,7 +854,34 @@ class ByzantineAgreement:
 		
 		del self.heldMessages['epoch'][target_epoch]
 		
-	def checkHeldIterMessages(target_iter):
+	def checkHeldCoinEpochMessages(self, target_epoch):
+		if target_epoch not in self.heldMessages['coin_epoch'] and target_epoch not in self.heldMessages['coin_epoch_accepted']:
+			return
+			
+		for message in self.heldMessages['coin_epoch'][target_epoch]:
+		
+			#we can get the message type without trouble 'cause we already got it in a 'try' earlier.
+			if message['body'][0] == MessageMode.coin_ack:
+				#Throw here - ack messages aren't supposed to be held here.
+				#TODO: actually throw.
+				continue
+			
+			ReliableBroadcast.handleRBroadcast(message) #we do not set checkCoinboardMessages to 'false' here - the recheck still needs to see if the message needs acks / is a passable list / whatever.
+
+				###Messages that are already accepted but held for epoch need to be stored SEPARATELY.
+
+				#coin_ack messages are only held if they're early, and only on accept. 
+				
+			#messages will never return here, though.
+		
+		del self.heldMessages['coin_epoch'][target_epoch]
+		
+		for message in self.heldMessages['coin_epoch_accepted'][target_epoch]:
+			self.validateCoinMsg(message) #messages that we've accepted just need to go back to the 'accept' thing, they don't need reliable broadcasting processing again.
+		
+		del self.heldMessages['coin_epoch_accepted'][target_epoch]
+		
+	def checkHeldIterMessages(self, target_iter):
 		if target_iter not in self.heldMessages['iteration']:
 			return
 			
@@ -574,11 +890,33 @@ class ByzantineAgreement:
 			#again, messages will never return here - same reason.
 		
 		del self.heldMessages['iteration'][target_iter]
+		
+	def checkHeldCoinIterMessages(self, target_iter):
+		if target_iter not in self.heldMessages['coin_iteration'] and target_iter not in self.heldMessages['coin_iteration_accepted']:
+			return
+			
+		for message in self.heldMessages['coin_iteration'][target_iter]:
+			if message['body'][0] == MessageMode.coin_ack:
+				#Throw here - ack messages aren't supposed to be held here.
+				#TODO: actually throw.
+				continue
+			
+			ReliableBroadcast.handleRBroadcast(message)
+			#again, messages will never return here - same reason.
+		
+		del self.heldMessages['coin_iteration'][target_iter]
+		
+		for message in self.heldMessages['coin_iteration_accepted'][target_iter]:
+			self.validateCoinMsg(message)
+			#again, messages will never return here - same reason.
+		
+		del self.heldMessages['coin_iteration_accepted'][target_iter]
 	
-	def checkHeldWaveMessages(wave): #check function signature of this
+	def checkHeldWaveMessages(self, wave): #check function signature of this
 		#TODO: This doesn't work. Messages can get put back in the late-wave bucket because the number of messages needed is just a minimum.
+		#EDIT: This works now (probably) now that heldMessages['wave'] uses a sorted list.
 		while len(self.heldMessages['wave'][wave]) > 0:
-			if self.heldMessages['wave'][wave][-1][0] <= sum(self.brachaMsgCtrTotal[wave-1]:
+			if self.heldMessages['wave'][wave][-1][0] <= sum(self.brachaMsgCtrTotal[wave-1]):
 				#this pulls out the message with the lowest # of messages (0) stored for the current wave held list (self.heldMessages['wave'][wave]) and checks its message counter [0] to see if we've received that many messages of the previous wave. If so, we reprocess it and repeat.
 				message = self.heldMessages['wave'][wave].pop(0)[1]
 				self.validatebrachaMsg(message)
@@ -595,21 +933,49 @@ class ByzantineAgreement:
 		#wave with not enough validated messages to pass on
 			#refresh: on receiving a new message of the previous wave, or at least enough messages of the previous wave
 		#This function goes through the message held list in order and feeds it to the validator one by one. We stop when we reach where the end of the message held list was when we started. Then we take only the new bit and it becomes the held messages queue.
-
+	
+	def checkHeldCoinFlipMessages(self, target_i,target_j,searchEpoch=self.epoch,searchIteration=self.iteration):
+	#somewhat contrary to the name, this RELEASES held coin flip messages for the specific thing. 
+	#it is only to be called if enough acknowledgements have been received for that reliable broadcast message to be participated in, as it bypasses reverification.
+		if (searchEpoch,searchIteration) not in self.heldMessages['coin_flip']:
+			return
+		if (target_i,target_j) not in self.heldMessages['coin_flip'][(searchEpoch,searchIteration)]:
+			return
+			
+		for message in self.heldMessages['coin_flip'][(searchEpoch,searchIteration)][(target_i,target_j)]:
+			ReliableBroadcast.handleRBroadcast(message,checkCoinboardMessages=False)
+		
+		del self.heldMessages['coin_flip'][(searchEpoch,searchIteration)][(target_i,target_j)]
+	
+		
+	def checkHeldCoinListMessages():
+		pass
+		###TODO: Yeah, sort this out
+		
 	
 		
 	def clearHeldEpochMessages():
 		#called on reset. 
 		self.heldMessages['epoch'] = {}
+		self.heldMessages['coin_epoch'] = {}
+		self.heldMessages['coin_epoch_accepted'] = {}
 		
 	def clearHeldIterMessages():
 		#called on new epoch. 
-		self.heldMessages['wave'] = {}
+		self.heldMessages['iteration'] = {}
+		self.heldMessages['coin_iteration'] = {}
+		self.heldMessages['coin_iteration_accepted'] = {}
 		
 	def clearHeldWaveMessages():
 		#called on new iteration. 
 		self.heldMessages['wave'] = {2:sortedlist(key=lambda x: x[0]), 3:sortedlist(key=lambda x: x[0])}
 		
+	#coinboard flip messages, and by extension, coinboard epoch/iteration messages, are NEVER cleared (the latter because flip and list messages are stored together in the epoch/iter buckets and we'd want to keep the flip messages). Even if a new iteration starts, old flips will be written into the coinboard to help along anyone else who comes calling.
+	
+	def clearHeldCoinListMessages():
+		#called on new iteration - if a new iteration starts, we must have r-received n - t coin lists, NOT counting whatever is in here, so every other good node will receive same. (Or we're a bad node and it doesn't matter.)
+		self.heldMessages['coin_list'] = {}
+	
 	
 	def _brachaWaveTwo():
 		if self.brachaMsgCtrGood[0][0] > self.brachaMsgCtrGood[0][1]:
@@ -629,7 +995,7 @@ class ByzantineAgreement:
 		#TODO: IMPORTANT - Broadcast SHOULD loop back, but if it does not, we need to call ValidateMessage manually. This could the last received message needed to advance to another wave...!
 		
 	
-	def _brachaWaveThree():
+	def _brachaWaveThree(self):
 		if self.brachaMsgCtrGood[0][0] > self.num_nodes // 2:
 			self.value = (False,True) #decide
 		elif self.brachaMsgCtrGood[0][1] > self.num_nodes // 2:
@@ -649,8 +1015,10 @@ class ByzantineAgreement:
 		self.brachaMsgCtrTotal[2][1 if self.value else 0] += 1
 		
 	
-	def _brachaFinal():
-		#find maximum number of decider messages. Is it 0 or 1?
+	def _brachaFinal(self):
+		#brachaFinal only fires once - afterward the instance is in 'wave 4' until a new iteration starts.
+		
+		#find maximum number of decider messages. Is it 0 or 1 that takes the crown?
 		num_deciding_messages = max(self.brachaMsgCtrGoodDeciding)
 		deciding_value = self.brachaMsgCtrGoodDeciding.index(num_deciding_messages)
 		deciding_equal = (self.brachaMsgCtrGoodDeciding[0] == self.brachaMsgCtrGoodDeciding[1])
@@ -662,9 +1030,11 @@ class ByzantineAgreement:
 			
 			return
 		elif num_deciding_messages > self.fault_bound:
+			#TODO: This is set up wrong. We need a new function that triggers the iteration if and only if the coinboard returns. Sorry guys.
+			#what we CAN do here is set up a flag so that the value is set to be captured from globalCoin... or not.
 			self.globalCoin()
 			if not deciding_equal:
-				self.value = (True if deciding_value == 1 else False,)
+				self.value = (True if deciding_value == 1 else False,) #if it's a tie, we stay with our previous value.
 			else:
 				self.value = (self.value[0],) #tie result, value carries over
 			#run coin, discard value, new iteration
@@ -676,8 +1046,96 @@ class ByzantineAgreement:
 			self.iteration += 1
 			self._startBracha()
 			
-		
 	
+		
+	def checkCoinboardMessageHolding(self,message):
+		#this only checks and holds messages for coinboard reasons (i.e. not for epoch/iteration reasons. Mind you, any message held for epoch/iteration reasons could probably ALSO be held for coinboard reasons, so...)
+		
+		#reminder: rbid = sender, counter, extraMeta. 
+		#extraMeta = byzID, epoch, iteration.
+		#if self.decided: 
+		#	return False #I've decided, I'm not accepting any more coinboard messages
+		#TODO: Can I really include the above? I'm relying on Bracha's lemma which states that all good nodes agree this turn OR next turn OR all good nodes run global-coin - in which case if this decides, we don't 
+			
+		#since a coinboard instance is associated with a byzantine instance AND an epoch AND a specific iteration, we need epoch and iteration holds as well as the rbid interrupts.
+		try:
+			messageExtraMeta = message['meta']['rbid'][2]
+			messageEpoch = messageExtraMeta[1]
+			messageIteration = messageExtraMeta[2]
+			messageCoinMode = message['body'][0]
+			messageOrigSender = message['meta']['rbid'][1]
+			if messageCoinMode == MessageMode.coin_flip:
+				message_i = message['body'][1]
+				message_j = message['body'][2]
+			if messageCoinMode == MessageMode.coin_list:
+				message_list = message['body'][1]
+		except TypeError, ValueError, IndexError:
+			if debug_byz:
+				print "Value error. Reliable? message from {} had to be discarded.".format(message['sender'])
+			return False #TODO: Is 'discard' the best thing here?
+		
+		search_past = False
+		
+		
+		if messageCoinMode == MessageMode.coin_flip:
+			search_past = False
+			if message_i == 1:
+				return True #we always accept i' == 1 messages
+			else: 
+				if self.epoch > messageEpoch:
+					search_past = True
+					#early message - look up past 
+				elif self.epoch < messageEpoch: 
+					holdCoinForLaterEpoch(message,messageEpoch) #TODO: release at START of target epoch - coinboard might be set up early for this sort of thing.
+					return False #we're done here
+				else: #epochs match
+					if self.iteration > messageIteration:
+						search_past = True
+					elif self.iteration < messageIteration:
+						holdCoinForLaterIteration(message,messageEpoch) #TODO: again, release at START of target iteration.
+						return False 
+				try:
+					if search_past:
+						acks_count = len(self.pastCoinboards[(messageEpoch,messageIteration)][message_i][messageOrigSender][1])
+					else:
+						acks_count = len(self.coinboard[message_i][messageOrigSender][1])
+				except Exception as err:
+					print(err)
+					#TODO: What kind of exceptions do we run into here?
+					
+				if acks_count >= self.num_nodes - self.fault_bound:
+					#let it go through
+					return True
+				else: 
+					holdCoinForSufficientAcks(message,message_i,message_j)
+					return False
+		elif messageCoinMode == MessageMode.coin_list:	
+			search_past = False
+			if self.epoch > messageEpoch:
+				search_past = True
+			elif self.epoch < messageEpoch:
+				holdCoinForLaterEpoch(message,messageEpoch) #when messages are released they'll be run back through this so we can use the same hold for both.
+				return False
+			else: 
+				if self.iteration > messageIteration:
+					search_past = True
+				elif self.iteration < messageIteration:
+					holdCoinForLaterIteration(message,messageEpoch) #TODO: again, release at START of target iteration.
+					return False
+			try: 
+				if search_past:
+					result, differences = checkListVsCoinboard(message_list,self.pastCoinboards[(messageEpoch,messageIteration)])
+				else:
+					result, differences = checkListVsCoinboard(message_list,self.coinboard)
+				if not result:
+					holdCoinListForLater(message,message_list,differences)
+				return result #passed? T/F
+			except Exception as err:
+				print(err)
+				#TODO: What kind of exceptions do we run into here?
+				
+	
+		
 		
 def getAllNodes():
 	#and here we end up with another pickle: for byzantine agreement to WORK, every node needs to know how many other nodes there are and what they are called.
@@ -690,8 +1148,16 @@ def getAllNodes():
 
 def main(args):
 	#args = [[my user ID, the number of nodes]]. For the time being, we're not passing around node IDs but eventually we WILL need everyone to know all the node ids.
+	#TODO: This code is really, really, REALLY stale by now.
 	print "Starting up..."
-	global username, num_nodes, fault_bound
+	global username, num_nodes, fault_bound, random_generator
+	try:
+		random_generator = random.SystemRandom
+	except:
+		print "Couldn't initialize RNG. Check that your OS/device supports random.SystemRandom()."
+		exit()
+		
+	
 	username = args[0]
 	MessageHandler.init(username,"node")
 	num_nodes = int(args[1])
@@ -726,6 +1192,8 @@ def main(args):
 					#in a real world distributed system, this would be through some other kind of context.
 					byzID = message['meta']['byzID'] #byzantine instance ID
 					byzValue = message['body'][1] #starting value
+					
+					#TODO: May have fluffed class instantiation.
 					ByzantineAgreement.new(byzID, byzValue)
 				
 				else:
