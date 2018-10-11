@@ -286,7 +286,7 @@ class ByzantineAgreement:
 		#ASSUMPTION: For now, value should be True or False: a single-valued byzantine thing.
 		
 		self.epoch = 1 #epoch = 1 to maxEpochs. If a reset occurs, we start at maxEpochs+1, +2, +3, etc.
-		self.heldMessages = {'epoch':{}, 'iteration':{}, 'wave':{2:sortedlist(key=lambda x: x[0]), 3:sortedlist(key=lambda x: x[0])}, 'coin_epoch':{}, 'coin_epoch_accepted':{}, 'coin_iteration':{}, 'coin_iteration_accepted':{}, 'coin_flip':{}, 'coin_list':{}}
+		self.heldMessages = {'epoch':{}, 'iteration':{}, 'wave':{2:sortedlist(key=lambda x: x[0]), 3:sortedlist(key=lambda x: x[0])}, 'coin_epoch':{}, 'coin_epoch_accepted':{}, 'coin_iteration':{}, 'coin_iteration_accepted':{}, 'coin_flip':{}, 'coin_list':[]}
 		
 		self.decided = False
 		self.decision = None
@@ -910,40 +910,48 @@ class ByzantineAgreement:
 		#multiple messages can be stored under the same i,j - reliable broadcast creates many copies!
 		self.heldMessages['coin_flip'](self.epoch,self.iteration)][(message_i,message_j)].append(message)
 		
-	def holdCoinListForLater(message,list):
-		stuff_to_fulfill = {}
-		for coin_item in list:
-			coin_j = coin_item[0]
-			coin_i = int(coin_item[1])
-			if coin_j not in self.nodes:
-				if debug_byz:
-					print "Not able to hold coin list from {}. It has a node {} we've never heard of that will never appear in our coinboard.".format(message['meta']['rbid'][0],coin_j)
-				return
-			if type(coin_i) is not int or coin_i < 0 or coin_i > self.num_nodes:
-				if debug_byz:
-					print "Not able to hold coin list from {}. It has an invalid i ({}) on {}'s column.".format(message['meta']['rbid'][0],coin_i,coin_j)
-				return
-			if coin_j in stuff_to_fulfill:
-				if debug_byz:
-					print "Warning: Coin list from {} may be invalid. It has more than one entry for j {}.".format(message['meta']['rbid'][0],coin_j)
-				if coin_i <= stuff_to_fulfill[coin_j]:
-					return #accept the higher of the two values in the duplicate
+		
+	def checkListVsCoinboard(list,coinboard):
+		try: 
+			stuff_to_fulfill = {}
+			for coin_item in list:
+				coin_j = coin_item[0]
+				coin_i = int(coin_item[1])
+				if coin_j not in self.nodes:
+					if debug_byz:
+						print "Error: Coin list from {} has a node {} we've never heard of that will never appear in our coinboard.".format(message['meta']['rbid'][0],coin_j)
+					return None, None
+				if type(coin_i) is not int or coin_i < 0 or coin_i > self.num_nodes:
+					if debug_byz:
+						print "Error: Coin list from {} has an invalid i ({}) on {}'s column.".format(message['meta']['rbid'][0],coin_i,coin_j)
+					return None, None
+				if coin_j in stuff_to_fulfill:
+					if debug_byz:
+						print "Warning: Coin list from {} may be invalid. It has more than one entry for j {}.".format(message['meta']['rbid'][0],coin_j)
+					if coin_i <= stuff_to_fulfill[coin_j]:
+						return #accept the higher of the two values in the duplicate
 				
-			if len(self.coinboard) < coin_i:
-				stuff_to_fulfill[coin_j] = coin_i
-				continue
-			if coin_j not in self.coinboard[coin_i]:
-				self.coinboard[coin_i][coin_j] = [None,set()] #set up coinboard entry for when it shows up
-				stuff_to_fulfill[coin_j] = coin_i
-				continue
-			if self.coinboard[coin_i][coin_j][0] is None:
-				stuff_to_fulfill[coin_j] = coin_i	
+				if len(coinboard) < coin_i or coin_j not in self.coinboard[coin_i] or coinboard[coin_i][coin_j][0] is None: #not got to that round yet OR no entry for that node OR no value in that node's entry
+					stuff_to_fulfill[coin_j] = coin_i	
 				
-		if len(stuff_to_fulfill) == 0:
+			if len(stuff_to_fulfill) == 0:
+				return True, None
+				
+			return False, stuff_to_fulfill
+				
+		except ValueError, KeyError, IndexError:
+			return None, None		
+		
+		
+	def holdCoinListForLater(message,differences):
+	
+		if len(differences) == 0:
 			if debug_byz:
-					print "Why are we holding the coin list from {}? It appears to be up to date.".format(message['meta']['rbid'][0])
+				print "Why are we holding the coin list from {}? It appears to be up to date.".format(message['meta']['rbid'][0])
 				
-		self.heldMessages['list'].append([stuff_to_fulfill,message])
+		self.heldMessages['coin_list'].append([stuff_to_fulfill,message])
+		
+	##This section has functions that check different held messages. Usually 'check' means 'release unconditionally', but that's not always the case.	
 	
 	def checkHeldEpochMessages(self,target_epoch):
 		if target_epoch not in self.heldMessages['epoch']:
@@ -1049,11 +1057,19 @@ class ByzantineAgreement:
 		del self.heldMessages['coin_flip'][(searchEpoch,searchIteration)][(target_i,target_j)]
 	
 		
-	def checkHeldCoinListMessages():
-		pass
-		###TODO: Yeah, sort this out
-		
-	
+	def checkHeldCoinListMessages(accepted_flip_i, accepted_flip_j):
+		#this releases held coin list messages given that the i and j have just been received here.
+		#TODO: Call this. 
+		for messageID in range(len(self.heldMessages['coin_list']) - 1,-1,-1): #list indices from n to 0 in reverse order
+			thisMessage = self.heldMessages['coin_list'][messageID]
+			if accepted_flip_j in thisMessage[0]: #[0] is the message block's dict of stuff to do. [1] would be the actual message.
+				if accepted_flip_i >= thisMessage[0][accepted_flip_j]:
+					del thisMessage[0][accepted_flip_j]
+					if len(thisMessage[0]) == 0:
+						del self.heldMessages['coin_list'][messageID]
+						ReliableBroadcast.handleRBroadcast(thisMessage[1],checkCoinboardMessages=False) #send the message back out and process it
+						#TODO: For efficiency, this should probably be here under the check that we cleared something. But what if a {} (ready to go) list ends up here? It'll never be released. Fix this... maybe check when storing?
+				
 		
 	def clearHeldEpochMessages():
 		#called on reset. 
@@ -1075,7 +1091,8 @@ class ByzantineAgreement:
 	
 	def clearHeldCoinListMessages():
 		#called on new iteration - if a new iteration starts, we must have r-received n - t coin lists, NOT counting whatever is in here, so every other good node will receive same. (Or we're a bad node and it doesn't matter.)
-		self.heldMessages['coin_list'] = {}
+		#this works because if we've reached a new iteration, then there's enough for other nodes to do so.
+		self.heldMessages['coin_list'] = []
 	
 	
 	def _brachaWaveTwo():
@@ -1185,7 +1202,8 @@ class ByzantineAgreement:
 		
 		if messageCoinMode == MessageMode.coin_flip:
 			search_past = False
-			if message_i == 1:
+			if message_i == 0: #i.e. round #1
+				#TODO: Message I's start at 0. Does everyone know this?
 				return True #we always accept i' == 1 messages
 			else: 
 				if self.epoch > messageEpoch:
@@ -1201,10 +1219,11 @@ class ByzantineAgreement:
 						holdCoinForLaterIteration(message,messageEpoch) #TODO: again, release at START of target iteration.
 						return False 
 				try:
+					#get how many acks there are for the PREVIOUS message.
 					if search_past:
-						acks_count = len(self.pastCoinboards[(messageEpoch,messageIteration)][message_i][messageOrigSender][1])
+						acks_count = len(self.pastCoinboards[(messageEpoch,messageIteration)][message_i-1][messageOrigSender][1])
 					else:
-						acks_count = len(self.coinboard[message_i][messageOrigSender][1])
+						acks_count = len(self.coinboard[message_i-1][messageOrigSender][1])
 				except Exception as err:
 					print(err)
 					#TODO: What kind of exceptions do we run into here?
@@ -1232,9 +1251,14 @@ class ByzantineAgreement:
 				if search_past:
 					result, differences = checkListVsCoinboard(message_list,self.pastCoinboards[(messageEpoch,messageIteration)])
 				else:
-					result, differences = checkListVsCoinboard(message_list,self.coinboard)
+					result, differences = checkListVsCoinboard(message_list,self.coinboard) 
+					
+				if result is None:
+					if debug_byz: 
+						print "Error processing coin list from {}.".format(messageOrigSender)
+					return False
 				if not result:
-					holdCoinListForLater(message,message_list,differences)
+					holdCoinListForLater(message,differences)
 				return result #passed? T/F
 			except Exception as err:
 				print(err)
