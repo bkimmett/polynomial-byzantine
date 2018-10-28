@@ -285,7 +285,7 @@ class ByzantineAgreement:
 		self.origValue = (byzValue,)
 		#ASSUMPTION: For now, value should be True or False: a single-valued byzantine thing.
 		
-		self.epoch = 1 #epoch = 1 to maxEpochs. If a reset occurs, we start at maxEpochs+1, +2, +3, etc.
+		self.epoch = 0 #epoch = 0 to maxEpochs-1. If a reset occurs, we start at maxEpochs+0, +1, +2, etc.
 		self.heldMessages = {'epoch':{}, 'iteration':{}, 'wave':{2:sortedlist(key=lambda x: x[0]), 3:sortedlist(key=lambda x: x[0])}, 'coin_epoch':{}, 'coin_epoch_accepted':{}, 'coin_iteration':{}, 'coin_iteration_accepted':{}, 'coin_flip':{}, 'coin_list':[]}
 		
 		self.decided = False
@@ -325,7 +325,9 @@ class ByzantineAgreement:
 		#TODO: Check coin messages at appropriate moments!!
 		
 		self.pastCoinboards = {}
+		self.pastCoinboardLogs = {} #log the past coinboard as we recorded it then any updates - two copies. One for as it was when we recorded it in logs, one for any updates after being shelved.
 		self.coinboard = [] #erase coin records
+		self.coinboardLogs = {}
 		self.whitelistedCoinboardList = set()
 		self.knownCoinboardList = set()
 		#TODO: reset these two lists each iteration...
@@ -368,7 +370,7 @@ class ByzantineAgreement:
 			return
 			
 		##### VERY IMPORTANT: We are assuming that there are exactly n iterations in an epoch. The original paper has m = Big-Theta(n) as the limit instead, and later on suggests m >= n for statistical analysis to work. What's the REAL max value of M?
-		self.iteration = 1
+		self.iteration = 0
 		self.clearHeldIterMessages()
 		
 		_startBracha()
@@ -376,7 +378,7 @@ class ByzantineAgreement:
 	def _startBracha(self):
 		if self.decided: #inactive after decision
 			return 
-		if self.iteration > self.maxIterations: #nvm, start a new EPOCH instead
+		if self.iteration >= self.maxIterations: #nvm, start a new EPOCH instead
 			#TODO: call process epoch
 			self._processEpoch()
 			self.epoch += 1
@@ -583,7 +585,7 @@ class ByzantineAgreement:
 			return 
 		
 		
-	def validateCoinMsg(self.message):
+	def validateCoinMsg(message):
 		#we still accept coinboard messages after decision... right?
 		
 		try: 
@@ -696,7 +698,7 @@ class ByzantineAgreement:
 			while len(this_coinboard) < self.num_nodes:
 				this_coinboard.append({}) #add blank extra spaces to fill out board
 			if message_j not in this_coinboard[message_i]:
-				this_coinboard[message_i][message] = (None,set()) #setup record
+				this_coinboard[message_i][message_j] = [None,set()] #setup record
 			
 			##OK, we've done some light validation, now store it.
 			
@@ -710,6 +712,10 @@ class ByzantineAgreement:
 				if this_coinboard[message_i][message_j][0] is None:
 					#no value stored
 					this_coinboard[message_i][message_j][0] = message_value
+					if message_from_the_past:
+						logPastCoinFlip(message_value,message_j,iteration, epoch)
+					else:
+						logCoinFlip(message_value,message_j,iteration) #message_i (round#) doesn't matter for logs
 					#TODO: check coin list messages here.
 					#checkHeldCoinListMessage()
 					
@@ -732,7 +738,7 @@ class ByzantineAgreement:
 				#Check number of acknowledgements.
 				if this_coinboard[message_i][message_j][1] == self.num_nodes-self.fault_bound:
 					#we've hit the boundary number of acknowledgements! (n-t)
-					#we trigger this only once - it does thing like continue the state.				
+					#we trigger this only once - it does things like continue the state.				
 					#we also (if we're in Stage 1) need to check for the number of acknowledgements - if we get enough columns, we move on to stage 2. (If we're in Stage 0, we store that we're ready to move on until Stage 1...)
 					if not message_from_the_past and self.coinState < 2:
 						if message_i == self.num_nodes - 1: 
@@ -786,28 +792,21 @@ class ByzantineAgreement:
 				raise
 				#TODO: build better exception handler.
 			
-			#if rbid[0] in self.whitelistedCoinboardList:
-			#	return
+			if rbid[0] in self.whitelistedCoinboardList:
+				return
 				#duplicate coin list - we can skip this as it's already been validated.
 			
-			if rbid[0] in self.knownCoinboardList:
-				return
-				#duplicate coin list - we can skip this as it's already been received.
-				#we don't need the whitelist above as this will be a superset of it.
-				
-			self.knownCoinboardList.append(rbid[0]) #we've received this list!
+			list_looks_OK, differences = checkListVsCoinboard(coin_list,self.coinboard)
 			
-			list_looks_OK = True
-			
-			try: 
-				for node in coin_list: #expecting list of [name,highest_i] values
-					highest_i = node[1]
-					if self.coinboard[highest_i][node[0]][0] is None:
-						list_looks_OK = False #empty slot? throw out
-					#this can also fail and fall through to the except, of course.
-			except KeyError,ValueError,IndexError:
-				list_looks_OK = False #the list referenced a node or whatever that our coinboard doesn't have.
-				#this also takes care of invalid I and J errors; the coin list will just be held forever until the new iteration starts, then it get thrown out.
+#			 try: 
+# 				for node in coin_list: #expecting list of [name,highest_i] values
+# 					highest_i = node[1]
+# 					if self.coinboard[highest_i][node[0]][0] is None:
+# 						list_looks_OK = False #empty slot? throw out
+# 					#this can also fail and fall through to the except, of course.
+# 			except KeyError,ValueError,IndexError:
+# 				list_looks_OK = False #the list referenced a node or whatever that our coinboard doesn't have.
+# 				#this also takes care of invalid I and J errors; the coin list will just be held forever until the new iteration starts, then it get thrown out.
 			
 			if list_looks_OK:
 				self.whitelistedCoinboardList.append(rbid[0]) #sender node name
@@ -817,7 +816,7 @@ class ByzantineAgreement:
 					self.coinState = 3
 					self._finalizeCoinboard() ##TODO
 			else:
-				self.holdCoinListForLater(coin_list)
+				self.holdCoinListForLater(message, coin_list) #TODO: Will this ever trigger? Surely the checkCoinboardHolding will catch it first, right?
 				#hold list for later
 			
 		else:
@@ -825,6 +824,54 @@ class ByzantineAgreement:
 				print "Throwing out bracha or some other type of noncoin message from {} via {}.".format(rbid[0], message['sender'])
 				print "This is NOT supposed to happen - noncoin messages aren't even supposed to hit this function. Debug time!"
 			return #this can't be processed, no way no how.
+	
+	def logCoinFlip(flip_value, node, iteration):
+		logCoinFlipSubsidiary(self.coinboardLogs,flip_value, node, iteration)
+	
+	
+	def logPastCoinFlip(flip_value, node, iteration, epoch):
+	#TODO: Use DeepCopy when copying.
+		if (epoch, iteration) not in self.pastCoinboardLogs:
+			#TODO: 
+	
+		thisCoinboardLogs = self.pastCoinboardLogs[epoch][1] #[0] is the original version, [1] is the updated version
+		logCoinFlipSubsidiary(thisCoinboardLogs,flip_value, node, iteration)
+	
+
+	def logCoinFlipSubsidiary(thisCoinboardLogs, flip_value, node, iteration):
+		if node not in thisCoinboardLogs: #set up node entry
+			thisCoinboardLogs[node] = []
+		if len(thisCoinboardLogs[node]) <= iteration: #set up line
+			thisCoinboardLogs[node].extend([None for x in range(iteration - len(thisCoinboardLogs[node]) + 1)])
+			#fill missing spaces with 'None'
+		if thisCoinboardLogs[node][iteration] is None: #set up cell
+			thisCoinboardLogs[node][iteration] = 0
+		thisCoinboardLogs[node][iteration] += 1 if flip_value else -1 #add
+	
+	def _globalCoin():
+		if len(self.coinboard) < 1:
+			self.coinboard.append({})
+		if self.username not in self.coinboard[0]:
+			self.coinboard[0][self.username] = [None,set()] #put our first coin here
+		
+		coin_value = self._broadcastCoin(0)
+		
+		self.coinboard[0][self.username][0] = coin_value #store our first coin in the coinboard
+		
+		if self.coinState > 0:
+			if debug_byz:
+				print "Error: Global Coin start called with Coin State >= 1."
+		else:
+			if precessCoin:
+				self.coinState = 2
+				self._broadcastCoinList()
+			else:
+				self.coinState = 1 #we're rolling!
+		#we set up the coinboard here (a little)
+		#we broadcast our first coin.
+		#we set coinState from 0 to 1 here. Or if PrecessCoin is True, we set it to 2 here and broadcast our list!!
+			
+		
 	
 	
 	def _broadcastCoin(self,message_i):
@@ -839,12 +886,47 @@ class ByzantineAgreement:
 		
 	
 	def _finalizeCoinboard(self):
-		pass
-		#TODO: make this
+		coinCount = 0	
+		#TODO: When do we generate the numpy array? Or whatever we're using.
+		for node in self.coinboardLogs:
+			if abs(self.coinboardLogs[node][self.iteration]) > 5 * sqrt( self.num_nodes * log(self.num_nodes) ):
+				blacklistNode(node)
+			else:
+				if node in self.goodNodes:
+					coinCount += self.coinboardLogs[node][self.iteration]
+		
+		if self.useCoinValue:
+			self.value = (True,) if coinCount >= 0 else (False,) #the second item is the Decide flag
+		else:
+			#find maximum number of decider messages. Is it 0 or 1 that takes the crown?
+			num_deciding_messages = max(self.brachaMsgCtrGoodDeciding)
+			deciding_value = self.brachaMsgCtrGoodDeciding.index(num_deciding_messages)
+			deciding_equal = (self.brachaMsgCtrGoodDeciding[0] == self.brachaMsgCtrGoodDeciding[1])
+			
+			if not deciding_equal:
+				self.value = ((True,) if deciding_value == 1 else (False,)) #if it's a tie, we stay with our previous value.
+			else:
+				self.value = (self.value[0],) #tie result, value carries over, decide flag doesn't
+		
+		self.iteration += 1
+		self._startBracha()
+		#Summon next round.
+		#coinboard processing will be triggered in startBracha(). (TODO)
+
 		
 	def _broadcastCoinList(self):
-		pass
-		#TODO: guess what: make this
+		#build and send the coin list from the coinboard.
+		buildingDict = {}
+		#we start with a dict because we go round 1, round 2, round 3... etc
+		#and so older-round items for a node in the dict will be overwritten with newer ones IF THEY EXIST.
+		for index, round in enumerate(self.coinboard):
+			for coin_j, coin_value in round.iteritems():
+				if coin_value[0] is not None: #i.e. coin received, true or false
+					buildingDict[coin_j] = index
+				
+		coinList = [[key,value] for key, value in buildingDict.iteritems()] #key = node name = J. value = highest round = I.
+		#now send off the list
+		ReliableBroadcast.broadcast((MessageMode.coin_list, coinList),extraMeta=(self.ID,self.epoch,self.iteration))	
 		
 	def blacklistNode(self,sender):
 		#TODO: implement this.
@@ -914,14 +996,14 @@ class ByzantineAgreement:
 	def checkListVsCoinboard(list,coinboard):
 		try: 
 			stuff_to_fulfill = {}
-			for coin_item in list:
+			for coin_item in list: #item format: [username,highest_value] where the highest_value is the index of the last item received. So "3" means items 0-3 received, etc.
 				coin_j = coin_item[0]
 				coin_i = int(coin_item[1])
 				if coin_j not in self.nodes:
 					if debug_byz:
 						print "Error: Coin list from {} has a node {} we've never heard of that will never appear in our coinboard.".format(message['meta']['rbid'][0],coin_j)
 					return None, None
-				if type(coin_i) is not int or coin_i < 0 or coin_i > self.num_nodes:
+				if type(coin_i) is not int or coin_i < 0 or coin_i >= self.num_nodes:
 					if debug_byz:
 						print "Error: Coin list from {} has an invalid i ({}) on {}'s column.".format(message['meta']['rbid'][0],coin_i,coin_j)
 					return None, None
@@ -1148,28 +1230,50 @@ class ByzantineAgreement:
 			
 			return
 		elif num_deciding_messages > self.fault_bound:
-			#TODO: This is set up wrong. We need a new function that triggers the iteration if and only if the coinboard returns. Sorry guys.
+			#TODO: TODO TODO This is set up wrong. We need a new function that triggers the iteration if and only if the coinboard returns. Sorry guys.
 			#what we CAN do here is set up a flag so that the value is set to be captured from globalCoin... or not.
 			self.useCoinValue = False
 			
+			self._globalCoin()
 			
-			self.globalCoin()
-			if not deciding_equal:
-				self.value = (True if deciding_value == 1 else False,) #if it's a tie, we stay with our previous value.
-			else:
-				self.value = (self.value[0],) #tie result, value carries over
-			#run coin, discard value, new iteration
-			self.iteration += 1
-			self._startBracha()
+			# if not deciding_equal:
+# 				self.value = (True if deciding_value == 1 else False,) #if it's a tie, we stay with our previous value.
+# 			else:
+# 				self.value = (self.value[0],) #tie result, value carries over
+# 			#run coin, discard value, new iteration
+# 			self.iteration += 1
+# 			self._startBracha()
 		else: 
 			self.useCoinValue = True
+			self._globalCoin()
 		
-			self.value = (self.globalCoin(),)
-			#run coin, set value, cycle
-			self.iteration += 1
-			self._startBracha()
+			# self.value = (self.globalCoin(),)
+# 			#run coin, set value, cycle
+# 			self.iteration += 1
+# 			self._startBracha()
 			
-	
+			
+	def _processEpoch(self):
+		#TODO
+		#SO here's what we're gonna do.
+		#first off: we need M_p. This is the consolidated epoch coinboard. It's a dict of nodes, and each node's value is a list, where the list has a cell for each iteration. M_p[node][iteration] is the sum of all that node's coinflips DURING THAT ITERATION. Which direction they pushed and how hard.
+		#A NOTE ABOUT DISTILLING THIS INTO A MATRIX: M_p[iteration][node], in that order. rows are iterations, columns are nodes. DO NOT GET THIS MIXED UP or your SVD will fall flat.
+		
+		#anyway, now that we have that: get the determinant of M_p. We're gonna have to turn M_p into a matrix with a set order at some point!! (see above)
+		#IF the determinant >= (beta/2)*sqrt(c1*m/t) WHERE alpha = sqrt(2n(n-2t)) AND beta = alpha - 2t AND c1 = a constant (TODO) AND m >= n (m should be the number of iterations) AND t = the fault bound, but it MIGHT be < n/36 instead of n/3 here. Check with Dr King. ANYWAY IF that's true...
+			#find the top right singular vector of M_p.
+			#_, _, vh = numpy.linalg.svd(M_p)
+			#v = get the conjugate transpose of vh
+			#trsv = first column of v (MAYBE - CHECK WITH PROF!!!! <<<<< ###### ****** )
+			
+			#the elements of the top right singular vector are now associated with the nodes. (I'm pretty sure - TODO)
+		
+			#next: we need a scoreList keeping track of the score of all nodes. Now... the score STICKS BETWEEN EPOCHS. Only the total reset resets it.
+			#go through the TRSV. Take the value for that node. Square it. Add it to the node's score.
+			#if a node's score is >= 1, blacklist it. 
+		#END IF
+		#(there's) nothing to do after the if, we just return.		
+		pass
 		
 	def checkCoinboardMessageHolding(self,message):
 		#this only checks and holds messages for coinboard reasons (i.e. not for epoch/iteration reasons. Mind you, any message held for epoch/iteration reasons could probably ALSO be held for coinboard reasons, so...)
