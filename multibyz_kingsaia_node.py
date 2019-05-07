@@ -201,7 +201,8 @@ class ReliableBroadcast:
 				print "Received invalid reliable broadcast message from node {} ().".format(sender,phase)
 			pass #error!: throw exception for malformed data
 			
-		return thisClass.checkRbroadcastEcho(data,rbid,uid) #runs 'check message' until it decides we're done handling any sort of necessary sending
+		if thisClass.checkRbroadcastEcho(data,rbid,uid): #runs 'check message' until it decides we're done handling any sort of necessary sending
+			return message #original packed message is fastballed back towards the client, as the validate functions the client will pass it on to use packed format
 	
 	@classmethod
 	def checkRbroadcastEcho(thisClass,data,rbid,uid):
@@ -222,7 +223,7 @@ class ReliableBroadcast:
 				#4th item in message is debug info
 				thisClass.broadcasting_echoes[uid][3] = RBPhase.echo #update node phase
 			else:
-				return #have to wait for more messages
+				return False #have to wait for more messages
 				
 		if thisClass.broadcasting_echoes[uid][3] == RBPhase.echo:
 			#waiting to send ready
@@ -234,7 +235,7 @@ class ReliableBroadcast:
 				#MessageHandler.sendAll(("rBroadcast","ready",data,None)) #message format: type, [phase, data, debuginfo]
 				thisClass.broadcasting_echoes[uid][3] = RBPhase.ready #update node phase
 			else:
-				return #have to wait for more messages
+				return False #have to wait for more messages
 				
 		if thisClass.broadcasting_echoes[uid][3] == RBPhase.ready:
 			#waiting to accept
@@ -243,18 +244,17 @@ class ReliableBroadcast:
 				thisClass.broadcasting_echoes[uid][3] = RBPhase.done
 				return thisClass.acceptRbroadcast(data,rbid)
 			else:
-				return #wait for more messages!
+				return False #wait for more messages!
 		
 		if thisClass.broadcasting_echoes[uid][3] == RBPhase.done:
-			return #we've already accepted this. no further processing.
+			return False #we've already accepted this. no further processing.
 		else:
 			pass #error! throw exception for malformed data in here. How'd THIS happen?			
 
 	
 	@classmethod
 	def acceptRbroadcast(thisClass,data,rbid):	
-		return data,rbid
-		pass
+		return True #data,rbid
 		#what does accepting a r-broadcasted message LOOK like? Well, the message is confirmed to be broadcast, and is passed on to the other parts of the program.
 		
 		#what in Byzantine uses RB:
@@ -266,15 +266,21 @@ class ByzantineAgreement:
 
 	MessageMode = Enum('MessageMode',['bracha','coin_flip','coin_ack','coin_list'])
 	
-	byzantine_list = {}
+	__byzantine_list__ = {}
 	
 	@classmethod
 	def getInstance(thisClass,byzID):
-		return thisClass.byzantine_list[tuple(byzID)]
+		try:
+			return thisClass.__byzantine_list__[tuple(byzID)]
+		except Exception:
+			return None #just in case an invalid ID is passed in
 		
-	@classmethod
-	def setInstance(thisClass,byzID,object):
-		thisClass.byzantine_list[tuple(byzID)] = object
+	#@classmethod
+	def setInstance(self):
+		self.__byzantine_list__[tuple(byzID)] = self
+		
+	#def setInstance(thisClass,byzID,object):
+	#	thisClass.byzantine_list[tuple(byzID)] = object
 		
 	#TODO: Add a method for list removal later.
 
@@ -286,7 +292,8 @@ class ByzantineAgreement:
 		#ASSUMPTION: For now, value should be True or False: a single-valued byzantine thing.
 		
 		self.epoch = 0 #epoch = 0 to maxEpochs-1. If a reset occurs, we start at maxEpochs+0, +1, +2, etc.
-		self.heldMessages = {'epoch':{}, 'iteration':{}, 'wave':{2:sortedlist(key=lambda x: x[0]), 3:sortedlist(key=lambda x: x[0])}, 'coin_epoch':{}, 'coin_epoch_accepted':{}, 'coin_iteration':{}, 'coin_iteration_accepted':{}, 'coin_flip':{}, 'coin_list':[]}
+		self.heldMessages = {'epoch':{}, 'iteration':{}, 'wave':{2:[[],[]], 3:[[],[]]}, 'coin_epoch':{}, 'coin_epoch_accepted':{}, 'coin_iteration':{}, 'coin_iteration_accepted':{}, 'coin_flip':{}, 'coin_list':[]}
+		#the '4' in wave is for wave 3 messages that are deciding.
 		
 		self.decided = False
 		self.decision = None
@@ -301,12 +308,12 @@ class ByzantineAgreement:
 		#which in this case is they received n - t messages, and over half that many (a majority) were for the set value. So we just need (n - t) // 2 + 1 messages to be in the chosen value.
 		#this happens to be about equal to t+1 messages, with t at worst case.
 		
-		self.maxIterations = len(self.nodes)
+		self.maxIterations = iterConst * len(self.nodes)
 		self.maxEpochs = epochConst * len(self.nodes) 
 		
 		self._reset() #sets up rewindable parts of agreement attempt.
 		
-		setInstance(self) #TODO: Yeah, is this gonna work?
+		self.setInstance() #TODO: Yeah, is this gonna work?
 		
 		self._startEpoch()
 		
@@ -328,9 +335,6 @@ class ByzantineAgreement:
 		self.pastCoinboardLogs = {} #log the past coinboard as we recorded it then any updates - two copies. One for as it was when we recorded it in logs, one for any updates after being shelved.
 		self.coinboard = [] #erase coin records
 		self.coinboardLogs = {}
-		self.whitelistedCoinboardList = set()
-		self.knownCoinboardList = set()
-		#TODO: reset these two lists each iteration...
 		
 		#self.pastWhitelistedCoinboardLists = {} #dictionary of sets - do we need this?
 		
@@ -369,7 +373,7 @@ class ByzantineAgreement:
 			#TODO
 			return
 			
-		##### VERY IMPORTANT: We are assuming that there are exactly n iterations in an epoch. The original paper has m = Big-Theta(n) as the limit instead, and later on suggests m >= n for statistical analysis to work. What's the REAL max value of M?
+		##### VERY IMPORTANT TODO: We are assuming that there are exactly n iterations in an epoch. The original paper has m = Big-Theta(n) as the limit instead, and later on suggests m >= n for statistical analysis to work. What's the REAL max value of M?
 		self.iteration = 0
 		self.clearHeldIterMessages()
 		
@@ -390,12 +394,18 @@ class ByzantineAgreement:
 		#above is message storage for validation purposes
 		#add a slot for each good node (first dict) and append slots for bad nodes to it (the .update part).
 		#potential perils: if somehow a bad node and a good node have the same identifier (which SHOULD be addressed and filtered for elsewhere), the entry for the bad node will overwrite that of the good one.
-		#but that proposes a breakdown of some sort earlier, as node names REALLY SHOULD be unique.
+		#but that presupposes a breakdown of some sort earlier, as node names REALLY SHOULD be unique.
 		self.brachaMsgCtrGood = [[0,0],[0,0],[0,0]]
 		self.brachaMsgCtrTotal = [[0,0],[0,0],[0,0]]
 		self.brachaMsgCtrGoodDeciding = [0,0]
 		#these are counters. They count the total number of verified messages with their value of False [0] and True [0], for each of waves 1, 2, 3.
 		#the third counter counts only the verified messages from good nodes that have indicated they are ready to decide.
+	
+		
+		self.whitelistedCoinboardList = set()
+		self.knownCoinboardList = set()
+		#these keep track of which coinboards we've received in this epoch/iteration pair. 
+		
 		
 		#aka Bracha Wave 1
 		ReliableBroadcast.broadcast((MessageMode.bracha, 1, self.value),extraMeta=(self.ID,self.epoch,self.iteration)):
@@ -414,10 +424,10 @@ class ByzantineAgreement:
 		self.clearHeldWaveMessages()
 		
 		
-	def validateBrachaMsg(self,message):	
+	def validateBrachaMsg(self,message):		
 		if self.decided: #inactive after decision
 			return 
-		#TODO: Better validation of bracha-style messages.
+		#PERPETUAL TODO: Better validation of bracha-style messages.
 		try:
 			extraMeta = message['meta']['rbid'][2]
 			remoteByzID = extraMeta[0]
@@ -425,7 +435,7 @@ class ByzantineAgreement:
 				if debug_byz:
 					print "Throwing out bracha message from {} with wrong Byzantine ID {} vs {}.".format(rbid[0],remoteByzID,self.ID)
 					print "You should probably check your message routing. This isn't supposed to happen."
-				return #throw out message. Somehow it was sent to the wrong iteration of byzantine agreement. How did this even happen?
+				return #throw out message. Somehow it was sent to the wrong byzantine agreement object entirely. How did this even happen?
 			
 			##Check Epoch
 			epoch = int(extraMeta[1])
@@ -467,8 +477,9 @@ class ByzantineAgreement:
 				return #wave can only be one, two, or three. period.
 			
 			msgValue = message['body'][2]
-			if not isinstance(msgValue, tuple) or (length(msgValue) not in [1,2]) or not all(type(item) is bool for item in items):
+			if not isinstance(msgValue, tuple) or (length(msgValue) not in [1,2]) or not all(type(item) is bool for item in msgValue):
 				#must be a tuple of 1 or 2 items. First item is value. Second item is wave 3 'decide' flag. Decide flag is ignored if it's a wave1/wave2 message.
+				#TODO - double check. Is everything supposed to be a boolean in this?
 				if debug_byz:
 					print "Throwing out impossible bracha message from {} via {}, invalid message type {}.".format(rbid[0],message['sender'],type(msgValue))
 				return
@@ -481,7 +492,7 @@ class ByzantineAgreement:
 		#unpack msgValue	
 		if wave == 3:
 			msgDecide = msgValue[1]
-		msgValue = msgValue[0]
+		msgValue = msgValue[0] #strip 'decide' flag
 		
 		
 		#validating time! 
@@ -497,7 +508,8 @@ class ByzantineAgreement:
 					#...but we COULD hit it later.
 					if debug_byz:
 						print "Holding uncertain wave 2 bracha message from {}, might not have enough wave 1 messages to validate {}.".format(rbid[0],msgValue)
-					self.holdForLaterWave(message, 2, self.initial_validation_bound - self.brachaMsgCtrTotal[0][1 if msgValue else 0])
+					self.holdForLaterWave(message, 2, msgValue) #needs self.initial_validation_bound messages of same type to release
+						#self.initial_validation_bound - self.brachaMsgCtrTotal[0][1 if msgValue else 0])
 				else:
 					#...and we're not going to be able to hit it in this go-round.
 					if debug_byz:
@@ -527,7 +539,7 @@ class ByzantineAgreement:
 					#...but we COULD hit it later.
 					if debug_byz:
 						print "Holding uncertain wave 3 bracha message from {}, might not have enough wave 2 messages to validate {}.".format(rbid[0],msgValue)
-					self.holdForLaterWave(message, 3, (self.num_nodes // 2 + 1) - self.brachaMsgCtrTotal[1][1 if msgValue else 0]) #second number is minimum number of messages needed before recheck 
+					self.holdForLaterWave(message, 3, msgValue) #(self.num_nodes // 2 + 1) - self.brachaMsgCtrTotal[1][1 if msgValue else 0]) #second number is minimum number of messages needed before recheck 
 				else:
 					#...and we're not going to be able to hit it in this go-round.
 					if debug_byz:
@@ -544,39 +556,45 @@ class ByzantineAgreement:
 		try:
 			if self.brachabits[rbid[0]][wave] is not None:
 				if msgValue != self.brachabits[rbid[0]][wave]:
-					#wut-oh. In this case, there was a mismatch between a previous message we received and a current message - in the same wave. As in, that was already sent. This is indicative of a faulty node and earns the 
+					#wut-oh. In this case, there was a mismatch between a previous message we received and a current message - in the same wave. As in, that was already sent. This is indicative of a faulty node and earns the node a spot on the blackList.
 					if debug_byz:
 							print "Received the same message with different values from node {}. This smells! Blacklisting.".format(rbid[0])
 					blacklistNode(rbid[0]) #remember, a reliable broadcast sender (rbid[0]) can't be forged because it has to match the initial sender of the message, and THAT can't be forged. This property has to hold for this to work.
+					
+				#you'll note there's the end of this if block. If there's a duplicate message, we do nothing; we recorded it already.	
 			else:
 				self.brachabits[rbid[0]][wave] = msgValue
 				if self.brachabits[rbid[0]][0]: #that is, if the node is deemed Good
 					self.brachaMsgCtrGood[wave-1][1 if msgValue else 0] += 1
-					if self.wave == 3:
+					if self.wave == 3 and msgDecide: #if they're deciding, record it as a deciding message
 						self.brachaMsgCtrGoodDeciding[1 if msgValue else 0] += 1
 				self.brachaMsgCtrTotal[wave-1][1 if msgValue else 0] += 1 
 				
 				if self.wave == 1 and sum(self.brachaMsgCtrGood[0]) >= self.num_nodes - self.fault_bound:
 					self.wave = 2
 					self._brachaWaveTwo()
+					
 				if self.wave == 2:
 					if sum(self.brachaMsgCtrGood[1]) >= self.num_nodes - self.fault_bound:
 						self.wave = 3
-						self._brachaWaveThree()
-						
-					checkHeldWaveMessages(2)
-					#check wave messages
+						self._brachaWaveThree()	
+					
 				if self.wave == 3:
 					if sum(self.brachaMsgCtrGood[2]) >= self.num_nodes - self.fault_bound:
 						self.wave = 4 #done with waves - mostly acts to prevent this from firing again
 						self._brachaFinal()
 				
+				if wave == 1: #note that 'wave' in this case is the wave of the MESSAGE, not US
+					checkHeldWaveMessages(2)
+					#check wave messages if we got a wave 1 message, which might release held wave 2 messages
+					
+				if wave	== 2:
 					checkHeldWaveMessages(3)
 					#check wave messages - happens after potential wave update to ensure quasi-atomicity
 				
 				#increment counters 
-				#TODO: Release held stage 2 or 3 messages if we have enough stage 1/2 messages.
-				#TODO: Call stage 2 or 3 if warranted.
+				#Release held stage 2 or 3 messages if we have enough stage 1/2 messages.
+				#Call stage 2 or 3 if warranted.
 					
 		except KeyError:
 			if debug_byz:
@@ -666,9 +684,9 @@ class ByzantineAgreement:
 					print "Invalid coinflip message from {} via {}, sync round# type {} instead of integer.".format(rbid[0],message['sender'],type(message_i))
 				return
 		
-			if message_i < 1: #TODO: or message_i > ???
+			if message_i < 1 or message_i > self.num_nodes: ###is this the right message_i max?
 				if debug_byz:
-					print "Invalid coinflip message from {} via {}, impossible round# ().".format(rbid[0], message['sender'],message_i)
+					print "Invalid coinflip message from {} via {}, impossible round# {}.".format(rbid[0], message['sender'],message_i)
 				return
 		
 			if message_j not in self.nodes:
@@ -695,10 +713,10 @@ class ByzantineAgreement:
 			else:
 				this_coinboard = self.coinboard
 				
-			while len(this_coinboard) < self.num_nodes:
+			while len(this_coinboard) < message_i:
 				this_coinboard.append({}) #add blank extra spaces to fill out board
-			if message_j not in this_coinboard[message_i]:
-				this_coinboard[message_i][message_j] = [None,set()] #setup record
+			if message_j not in this_coinboard[message_i-1]:
+				this_coinboard[message_i-1][message_j] = [None,set()] #setup record
 			
 			##OK, we've done some light validation, now store it.
 			
@@ -709,9 +727,9 @@ class ByzantineAgreement:
 					self.blacklistNode(rbid[0])
 					return
 			
-				if this_coinboard[message_i][message_j][0] is None:
+				if this_coinboard[message_i-1][message_j][0] is None:
 					#no value stored
-					this_coinboard[message_i][message_j][0] = message_value
+					this_coinboard[message_i-1][message_j][0] = message_value
 					if message_from_the_past:
 						logPastCoinFlip(message_value,message_j,iteration, epoch)
 					else:
@@ -724,24 +742,25 @@ class ByzantineAgreement:
 						#Broadcast acknowledgement that we received this message - but only if this is the current coinboard and we haven't sent our own list yet.
 						
 				else:
-					if message_value != this_coinboard[message_i][message_j][0]:
+					if message_value != this_coinboard[message_i-1][message_j][0]:
 						#We have two messages with different values? This isn't supposed to happen. Blacklist the node...
 						if debug_byz:
 							print "{} sent the same flip twice, with two different values. Discarding/blacklisting.".format(rbid[0])
 						self.blacklistNode(rbid[0])
-						
-						return
+					
+					#either way, if it's a copy with the same value, we just throw it out - duplicate. 	
+					return
 						
 			
 			if mode == MessageMode.coin_ack:
-				this_coinboard[message_i][message_j][1].append(rbid[0]) #sender of broadcast
+				this_coinboard[message_i-1][message_j][1].append(rbid[0]) #sender of broadcast
 				#Check number of acknowledgements.
-				if this_coinboard[message_i][message_j][1] == self.num_nodes-self.fault_bound:
+				if this_coinboard[message_i-1][message_j][1] == self.num_nodes-self.fault_bound:
 					#we've hit the boundary number of acknowledgements! (n-t)
 					#we trigger this only once - it does things like continue the state.				
 					#we also (if we're in Stage 1) need to check for the number of acknowledgements - if we get enough columns, we move on to stage 2. (If we're in Stage 0, we store that we're ready to move on until Stage 1...)
 					if not message_from_the_past and self.coinState < 2:
-						if message_i == self.num_nodes - 1: 
+						if message_i == self.num_nodes: #coinboard maxed out? 
 							self.coinColumnsReady += 1
 							if self.coinColumnsReady == self.num_nodes - self.fault_bound:
 								if self.coinState == 1:
@@ -831,8 +850,9 @@ class ByzantineAgreement:
 	
 	def logPastCoinFlip(flip_value, node, iteration, epoch):
 	#TODO: Use DeepCopy when copying.
-		if (epoch, iteration) not in self.pastCoinboardLogs:
-			#TODO: 
+		if epoch not in self.pastCoinboardLogs: #coinboard logs is epoch only - not iteration
+			#TODO:  
+			self.pastCoinboardLogs[epoch] = [{},{}] #create a storage for original and updated past coinboard. But original will always stay empty. TODO: Do proper error handling for this.
 	
 		thisCoinboardLogs = self.pastCoinboardLogs[epoch][1] #[0] is the original version, [1] is the updated version
 		logCoinFlipSubsidiary(thisCoinboardLogs,flip_value, node, iteration)
@@ -858,11 +878,11 @@ class ByzantineAgreement:
 		
 		self.coinboard[0][self.username][0] = coin_value #store our first coin in the coinboard
 		
-		if self.coinState > 0:
+		if self.coinState > 0: #0 = waiting 1 = sending coins 2 = sending lists 3 = done?
 			if debug_byz:
 				print "Error: Global Coin start called with Coin State >= 1."
 		else:
-			if precessCoin:
+			if precessCoin: #precessCoin is basically saying that we've received info for the coinboard to go straight to state 2 already
 				self.coinState = 2
 				self._broadcastCoinList()
 			else:
@@ -877,7 +897,7 @@ class ByzantineAgreement:
 	def _broadcastCoin(self,message_i):
 		global username, random_generator
 		flip = (random_generator.random() >= .5) #True if >= .5, otherwise False. A coin toss.
-		ReliableBroadcast.broadcast((MessageMode.coin_flip, message_i, username, ),extraMeta=(self.ID,self.epoch,self.iteration))
+		ReliableBroadcast.broadcast((MessageMode.coin_flip, message_i, username),extraMeta=(self.ID,self.epoch,self.iteration))
 		
 		return flip #so we can use it too
 		
@@ -908,6 +928,8 @@ class ByzantineAgreement:
 			else:
 				self.value = (self.value[0],) #tie result, value carries over, decide flag doesn't
 		
+		#TODO: store coinboard here? Or later?
+		
 		self.iteration += 1
 		self._startBracha()
 		#Summon next round.
@@ -932,6 +954,7 @@ class ByzantineAgreement:
 		#TODO: implement this.
 		#if we blacklist more than t nodes, we have a serious problem. What do we do then?
 		#is it possible to blacklist ourselves?
+		#if we blacklist n/3 or more, or 2t or more, abort/_reset().
 		pass	
 		
 		#self.heldMessages = {'epoch':{}, 'iteration':{}, 'wave':{}}
@@ -946,13 +969,14 @@ class ByzantineAgreement:
 	def holdForLaterIteration(self,message, target_iter):
 		#saving a message until later. Fish saved messages out with checkHeldMessages.
 
-		if target_iter not in self.heldMessages['epoch']:
-			self.heldMessages['epoch'][target_iter] = blist()
+		if target_iter not in self.heldMessages['iteration']:
+			self.heldMessages['iteration'][target_iter] = blist()
 		self.heldMessages['iteration'][target_iter].append(message)
 	
-	def holdForLaterWave(message, wave, number_messages_needed):
-		#saving a message until later. Fish saved messages out with checkHeldMessages.
-		self.heldMessages['wave'][wave].add( (sum(self.brachaMsgCtrTotal[wave-1])+number_messages_needed, message) )
+	def holdForLaterWave(message, wave, msgValue): #number_messages_needed):
+		#saving a message until later. Fish saved messages out with checkHeldWaveMessages.
+		#old ver	#self.heldMessages['wave'][wave].add( (sum(self.brachaMsgCtrTotal[wave-1])+number_messages_needed, message) )
+		self.heldMessages['wave'][wave][1 if msgValue else 0].append(message)
 		#the 'number_messages_needed' at the front - this number will only go DOWN as we receive more wave2/wave3 messages. (this works because held wave messages are wiped at the start of a new iteration) So the list is sorted in reverse order of the number of messages needed, and when we get a new message we just have to check the number of messages received and we're fine.
 		
 		#so we're putting (total messages received so far) + (num messages needed) at the front of each message. And when (total messages received) is >= that number, you pop the message.
@@ -1040,7 +1064,7 @@ class ByzantineAgreement:
 			return
 			
 		for message in self.heldMessages['epoch'][target_epoch]:
-			self.validatebrachaMsg(message)
+			self.validateBrachaMsg(message)
 			#messages will never return here. They either go into the iteration or wave hold buckets, get processed, or get discarded.
 		
 		del self.heldMessages['epoch'][target_epoch]
@@ -1077,7 +1101,7 @@ class ByzantineAgreement:
 			return
 			
 		for message in self.heldMessages['iteration'][target_iter]:
-			self.validatebrachaMsg(message)
+			self.validateBrachaMsg(message)
 			#again, messages will never return here - same reason.
 		
 		del self.heldMessages['iteration'][target_iter]
@@ -1103,17 +1127,46 @@ class ByzantineAgreement:
 		
 		del self.heldMessages['coin_iteration_accepted'][target_iter]
 	
-	def checkHeldWaveMessages(self, wave): #check function signature of this
+	def checkHeldWaveMessages(self, wave):
+		#remember, it's '[1 if msgValue else 0]
+		#so [F,T] is the format of messages_found
+		if wave == 2:
+			messages_needed = self.initial_validation_bound
+			messages_found = self.brachaMsgCtrTotal[0] 
+			
+		elif wave == 3:
+			messages_needed = self.num_nodes // 2 + 1
+			messages_found = self.brachaMsgCtrTotal[1]
+		else:
+			pass #TODO: throw error. Programmer screwup.
+			
+		for i in range(2): #0,1			
+			if messages_found[i] >= messages_needed:
+				for message in self.heldMessages['wave'][wave][i]:
+					self.validateBrachaMsg(message)
+		
+				self.heldMessages['wave'][wave][i] = [] #clear messages
+			
+				if wave == 3:
+					if debug_byz:
+						lmessages = len(self.heldMessages['wave'][wave][1-i])
+						if lmessages > 0:
+							print "Throwing out {} unvalidateable wave 3 messages. This is indicative of probable adversary activity.".format(lmessages)
+					self.heldMessages['wave'][wave][1-i] = [] #if we successfully processed one bucket of wave 3 messages, then the other bucket, if any, are invalid (because you can't have a majority of the other message if you had a majority of this one). So throw those out.
+					break
+			
+			
+	
 		#TODO: This doesn't work. Messages can get put back in the late-wave bucket because the number of messages needed is just a minimum.
 		#EDIT: This works now (probably) now that heldMessages['wave'] uses a sorted list.
-		while len(self.heldMessages['wave'][wave]) > 0:
-			if self.heldMessages['wave'][wave][-1][0] <= sum(self.brachaMsgCtrTotal[wave-1]):
-				#this pulls out the message with the lowest # of messages (0) stored for the current wave held list (self.heldMessages['wave'][wave]) and checks its message counter [0] to see if we've received that many messages of the previous wave. If so, we reprocess it and repeat.
-				message = self.heldMessages['wave'][wave].pop(0)[1]
-				self.validatebrachaMsg(message)
-			else:
-				#otherwise, we end this while loop.
-				break	
+# 		while len(self.heldMessages['wave'][wave]) > 0:
+# 			if self.heldMessages['wave'][wave][-1][0] <= sum(self.brachaMsgCtrTotal[wave-1]):
+# 				#this pulls out the message with the lowest # of messages (0) stored for the current wave held list (self.heldMessages['wave'][wave]) and checks its message counter [0] to see if we've received that many messages of the previous wave. If so, we reprocess it and repeat.
+# 				message = self.heldMessages['wave'][wave].pop(0)[1]
+# 				self.validateBrachaMsg(message)
+# 			else:
+# 				#otherwise, we end this while loop.
+# 				break	
 			
 		
 		#we can shortcut a lot of this by considering reasons messages are held:
@@ -1203,7 +1256,7 @@ class ByzantineAgreement:
 		else:
 			self.value = (self.value[0],False) #no decide
 		
-		#Bracha Wave 2
+		#Bracha Wave 3
 		ReliableBroadcast.broadcast((MessageMode.bracha, 3, self.value),extraMeta=(self.ID,self.epoch,self.iteration)):
 		#also, count myself (free).
 		self.brachabits[username][3] = self.value[0]
@@ -1212,7 +1265,7 @@ class ByzantineAgreement:
 			self.brachaMsgCtrGood[2][1 if self.value[0] else 0] += 1
 			if self.value[1]:
 				self.brachaMsgCtrGoodDeciding[1 if self.value[0] else 0] += 1
-		self.brachaMsgCtrTotal[2][1 if self.value else 0] += 1
+		self.brachaMsgCtrTotal[2][1 if self.value[0] else 0] += 1
 		
 	
 	def _brachaFinal(self):
@@ -1226,8 +1279,7 @@ class ByzantineAgreement:
 		if num_deciding_messages >= self.num_nodes - self.fault_bound:
 			self.decided = True
 			self.decision = True if deciding_value == 1 else False
-			
-			
+	
 			return
 		elif num_deciding_messages > self.fault_bound:
 			#TODO: TODO TODO This is set up wrong. We need a new function that triggers the iteration if and only if the coinboard returns. Sorry guys.
@@ -1259,8 +1311,8 @@ class ByzantineAgreement:
 		#first off: we need M_p. This is the consolidated epoch coinboard. It's a dict of nodes, and each node's value is a list, where the list has a cell for each iteration. M_p[node][iteration] is the sum of all that node's coinflips DURING THAT ITERATION. Which direction they pushed and how hard.
 		#A NOTE ABOUT DISTILLING THIS INTO A MATRIX: M_p[iteration][node], in that order. rows are iterations, columns are nodes. DO NOT GET THIS MIXED UP or your SVD will fall flat.
 		
-		#anyway, now that we have that: get the determinant of M_p. We're gonna have to turn M_p into a matrix with a set order at some point!! (see above)
-		#IF the determinant >= (beta/2)*sqrt(c1*m/t) WHERE alpha = sqrt(2n(n-2t)) AND beta = alpha - 2t AND c1 = a constant (TODO) AND m >= n (m should be the number of iterations) AND t = the fault bound, but it MIGHT be < n/36 instead of n/3 here. Check with Dr King. ANYWAY IF that's true...
+		#anyway, now that we have that: get the <s>determinant</s> NORM of M_p. We're gonna have to turn M_p into a matrix with a set order at some point!! (see above)
+		#IF the norm >= (beta/2)*sqrt(c1*m/t) WHERE alpha = sqrt(2n(n-2t)) AND beta = alpha - 2t AND c1 = a constant (TODO) AND m >= n (m should be the number of iterations) AND t = the fault bound, but it MIGHT be < n/36 instead of n/3 here. Check with Dr King. ANYWAY IF that's true...
 			#find the top right singular vector of M_p.
 			#_, _, vh = numpy.linalg.svd(M_p)
 			#v = get the conjugate transpose of vh
@@ -1278,11 +1330,15 @@ class ByzantineAgreement:
 	def checkCoinboardMessageHolding(self,message):
 		#this only checks and holds messages for coinboard reasons (i.e. not for epoch/iteration reasons. Mind you, any message held for epoch/iteration reasons could probably ALSO be held for coinboard reasons, so...)
 		
+		#it's worth noting that coinboard holding procs in the reliable broadcast itself.
+		#this means it takes place BEFORE epoch/iteration holding. 
+		
 		#reminder: rbid = sender, counter, extraMeta. 
 		#extraMeta = byzID, epoch, iteration.
 		#if self.decided: 
 		#	return False #I've decided, I'm not accepting any more coinboard messages
 		#TODO: Can I really include the above? I'm relying on Bracha's lemma which states that all good nodes agree this turn OR next turn OR all good nodes run global-coin - in which case if this decides, we don't 
+				
 			
 		#since a coinboard instance is associated with a byzantine instance AND an epoch AND a specific iteration, we need epoch and iteration holds as well as the rbid interrupts.
 		try:
@@ -1306,7 +1362,7 @@ class ByzantineAgreement:
 		
 		if messageCoinMode == MessageMode.coin_flip:
 			search_past = False
-			if message_i == 0: #i.e. round #1
+			if message_i == 1: #i.e. round #1
 				#TODO: Message I's start at 0. Does everyone know this?
 				return True #we always accept i' == 1 messages
 			else: 
@@ -1438,11 +1494,31 @@ def main(args):
 			elif message['type'] == "node":
 				#reliable broadcast message format: 
 				#metadata has type.
+				#TODO: this code is COMPLETELY messed up.
 				msgType = msgBody[0]
 				if msgType == "rBroadcast":
 					result = ReliableBroadcast.handleRBroadcast(message)
 					if result is not None:
-						#result from Accept. Do stuff.
+						#result from Accept. Do stuff. TODO
+						if type(result['body'][0]) is ByzantineAgreement.MessageMode:
+							msgModeTemp = result['body'][0]
+							#what we need to do here IS: 
+							#strip out everything but the actual message and relevant headers (maybe already done?) - yeah, already done
+							#figure out WHICH BYZANTINE INSTANCE the message belongs to
+							thisInstance = ByzantineAgreement.getInstance(result['meta']['byzID'])
+							
+							#take that instance and kick this to it
+							if msgModeTemp == ByzantineAgreement.MessageMode.bracha:
+								thisInstance.validateBrachaMsg(result)
+								
+								#TODO call bracha message verify function
+							elif msgModeTemp == ByzantineAgreement.MessageMode.coin_flip or msgModeTemp == ByzantineAgreement.MessageMode.coin_flip or msgModeTemp == ByzantineAgreement.MessageMode.coin_ack:
+								thisInstance.validateCoinMsg(result)
+								#TODO call coin input message verify function
+						
+						
+						else:
+							pass #TODO throw error - this isn't supposed to happen. Only node messages should hit this block, but no node message can not have a MessageMode.
 						print "Accepted message: "+repr(result)
 				else:
 					print "Unknown node message received."
