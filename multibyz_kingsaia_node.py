@@ -1,15 +1,16 @@
 #!/usr/bin/env python
 
-from __future__ import division
-from sys import argv, exit
-from time import sleep
-from math import floor
-from copy import deepcopy
-import multibyz_kingsaia_network as MessageHandler
+from __future__ import division #utility
+from sys import argv, exit 		#utility
+from time import sleep 			#to wait for messages
+from math import floor 			#utility
+from copy import deepcopy 		#utility
+import numpy as np 				#for matrix operations in _processEpoch
+import multibyz_kingsaia_network as MessageHandler 
 #getting an error with the above line? 'pip install kombu'
-from enum import Enum
+from enum import Enum			#for reliable broadcast and byzantine message mode phasing
 #getting an error with the above line? 'pip install enum34'
-from blist import blist, btuple, sortedlist
+from blist import blist 		#containers that offer better performance when they get big. maybe unnecessary?
 #getting an error with the above line? 'pip install blist'
 
 #debug logging
@@ -60,12 +61,20 @@ fault_bound = 0
 message_counter = 0
 
 
-
-	
 		
 class ReliableBroadcast:
+
+	#TODO: There's a little problem with this - basically, it's based on the assumption that there is one list of nodes, which never changes IN SIZE. As the fault bound (t) is a proportion of the number of nodes (n), if those numbers change in the middle of a reliable broadcast instance
+	
+	# What can be done to fix this: 
+	#[1] If a message comes in with a ByzID, it uses the ByzantineAgreement object's node list. Any messages from nodes not on the node list are completely and totally ignored. 
+	#[2] If a message comes in without a ByzID, we have to guess. So take getAllNodes() and store that, and use that as the node list, OR just accept from anybody (though using the latter approach is prone to breakage if the node list is updated in the middle. Bracha didn't plan for THIS.)
+	#[3] If we broadcast a non-Byz message, we set up the node list based on our knowledge at time of sending [getAllNodes().]
 	
 	broadcasting_echoes = {}
+	
+	num_nodes = None
+	fault_bound = None
 	
 	RBPhase = Enum('RBPhase',['initial','echo','ready','done'])
 	#a note on these phases: the first three are used to tag individual reliable broadcast messages, BUT ALSO all four are used to indicate what state a node is in for this reliable broadcast instance: "I just sent THIS type of message" (or 'I received this one' in the case of Initial) or "I'm done!"
@@ -75,6 +84,13 @@ class ReliableBroadcast:
 	
 	#TODO: if receiving receives a message from a node not currently in the network, it should store that in case of that node joining later (and the join being late).
 	#rev: FLEXNODE
+		
+	
+	@classmethod
+	def initial_setup(thisClass,numnodes):
+	
+		thisClass.num_nodes = numnodes
+		thisClass.fault_bound = floor((self.num_nodes-1)/3) #n >= 3t+1  - this variable is 't'
 	
 	@classmethod
 	def setupRbroadcastEcho(thisClass,uid):
@@ -110,7 +126,7 @@ class ReliableBroadcast:
 		print "SENDING INITIAL reliable broadcast message for key < {} > to all.".format(repr(message))
 		message_counter += 1
 		#We don't need to call setupRbroadcastEcho yet. The first person to receive the 'initial' message will be-- us! And it'll happen then.
-	
+		#Also notably, we don't need a node list to broadcast. We just broadcast to EVERYBODY. Nodes will throw out messages that aren't on their list of participants in a byzantine instance.
 	
 	@classmethod
 	def handleRBroadcast(thisClass,message,checkCoinboardMessages=True): #when a coinboard message is released from being held, the release function will call handleRBroadcast but set the extra argument to false. This skips having it checked again. Everyone else: don't use this argument for anything.
@@ -183,20 +199,20 @@ class ReliableBroadcast:
 			thisClass.broadcasting_echoes[uid][1].add(sender)
 			print "Received ECHO reliable broadcast message for key < {} > from node {}.".format(repr(data),sender)
 			if thisClass.broadcasting_echoes[uid][3] == 1 or thisClass.broadcasting_echoes[uid][3] == 2:
-				print "{}/{} of {} echo messages so far.".format(len(thisClass.broadcasting_echoes[uid][1]), (num_nodes + fault_bound) / 2, num_nodes) #print how many echoes we need to advance
+				print "{}/{} of {} echo messages so far.".format(len(thisClass.broadcasting_echoes[uid][1]), (thisClass.num_nodes + thisClass.fault_bound) / 2, thisClass.num_nodes) #print how many echoes we need to advance
 			else:
-				print "{} of {} echo messages.".format(len(thisClass.broadcasting_echoes[uid][1]), num_nodes) #just print how many echoes
+				print "{} of {} echo messages.".format(len(thisClass.broadcasting_echoes[uid][1]), thisClass.num_nodes) #just print how many echoes
 		elif phase == RBPhase.ready:
 			thisClass.broadcasting_echoes[uid][2].add(sender)
 			
 			if debug_rb:
 				print "Received READY reliable broadcast message for key < {} > from node {}.".format(repr(data),sender)
 				if thisClass.broadcasting_echoes[uid][3] == 1 or thisClass.broadcasting_echoes[uid][3] == 2:
-					print "{}/{} of {} ready messages so far.".format(len(thisClass.broadcasting_echoes[uid][2]), fault_bound + 1, num_nodes) #print how many readies we need to advance
+					print "{}/{} of {} ready messages so far.".format(len(thisClass.broadcasting_echoes[uid][2]), thisClass.fault_bound + 1, thisClass.num_nodes) #print how many readies we need to advance
 				elif thisClass.broadcasting_echoes[uid][3] == 3:
-					print "{}/{} of {} ready messages so far.".format(len(thisClass.broadcasting_echoes[uid][2]), fault_bound*2 + 1, num_nodes) #print how many readies we need to accept
+					print "{}/{} of {} ready messages so far.".format(len(thisClass.broadcasting_echoes[uid][2]), thisClass.fault_bound*2 + 1, thisClass.num_nodes) #print how many readies we need to accept
 				else: 
-					print "{} of {} ready messages.".format(len(thisClass.broadcasting_echoes[uid][2]), num_nodes) #print how many readies we got
+					print "{} of {} ready messages.".format(len(thisClass.broadcasting_echoes[uid][2]), thisClass.num_nodes) #print how many readies we got
 		else:
 			if debug_rb:
 				print "Received invalid reliable broadcast message from node {} ().".format(sender,phase)
@@ -240,7 +256,7 @@ class ReliableBroadcast:
 				
 		if thisClass.broadcasting_echoes[uid][3] == RBPhase.ready:
 			#waiting to accept
-			if len(thisClass.broadcasting_echoes[uid][2]) >= fault_bound*2 + 1: #2t+1 readies only
+			if len(thisClass.broadcasting_echoes[uid][2]) >= thisClass.fault_bound*2 + 1: #2t+1 readies only
 				#ACCEPT!
 				thisClass.broadcasting_echoes[uid][3] = RBPhase.done
 				return thisClass.acceptRbroadcast(data,rbid)
@@ -303,6 +319,7 @@ class ByzantineAgreement:
 		
 		self.num_nodes = len(self.nodes)
 		self.fault_bound = floor((self.num_nodes-1)/3) #n >= 3t+1  - this variable is 't'
+		self.coin_fault_bound = self.fault_bound #TODO - coin fault bound is going to be smaller than byzantine fault bound... maybe?
 		self.initial_validation_bound = (self.num_nodes - self.fault_bound) // 2 + 1 # (n - t) / 2 + 1. Used to validate wave 2 bracha messages. Never changes even as nodes are blacklisted from our end, because we can't assume the size of other nodes' blacklists because: 
 		#the condition for validating a wave 2 message is that the node that sent the message had to have received some combination of wave 1 messages that could have made it send a wave 2 message.
 		#which in this case is they received n - t messages, and over half that many (a majority) were for the set value. So we just need (n - t) // 2 + 1 messages to be in the chosen value.
@@ -358,6 +375,8 @@ class ByzantineAgreement:
 		
 		self.coinboardLogs = {}
 		
+		self.epochFlips = []
+		
 		#TODO: What else gets cleared on new epoch?
 		
 		_startBracha()
@@ -378,6 +397,7 @@ class ByzantineAgreement:
 		self.coinState = 0 
 		self.coinColumnsReady = 0 #how many columns have been received by at least n-t nodes?
 		self.precessCoin = False #if we're in coinState 0, do we move to coinState 2 immediately after coinState 1?
+		self.precessCoinII = False #do we move to coinState 3 immediately after coinState 2?
 		self.lastCoinBroadcast = 0 #what's the last message_i (of our own) we broadcast?
 
 		self.coinState = 0 
@@ -777,6 +797,9 @@ class ByzantineAgreement:
 								if self.coinState == 1:
 									self.coinState = 2
 									self._broadcastCoinList()
+									if self.precessCoinII:
+										self.coinState = 3
+										self._finalizeCoinboard() 
 								else:
 									self.precessCoin = True
 								#move to state 2... or at least say we're ready to do so	
@@ -843,10 +866,13 @@ class ByzantineAgreement:
 			if list_looks_OK:
 				self.whitelistedCoinboardList.append(rbid[0]) #sender node name
 			
-				if len(self.whitelistedCoinboardList) == self.num_nodes-self.fault_bound:
-					#OK, it's go time! Move to stage 3.
-					self.coinState = 3
-					self._finalizeCoinboard() 
+				if len(self.whitelistedCoinboardList) == self.num_nodes-self.fault_bound: 
+					if self.coinState == 2:
+						#OK, it's go time! Move to stage 3.
+						self.coinState = 3
+						self._finalizeCoinboard()
+					else: 
+						self.precessCoinII = True
 			else:
 				if list_looks_OK == False:
 				
@@ -878,8 +904,8 @@ class ByzantineAgreement:
 		if node not in thisCoinboardLogs: #set up node entry
 			thisCoinboardLogs[node] = []
 		if len(thisCoinboardLogs[node]) <= iteration: #set up line
-			thisCoinboardLogs[node].extend([None for x in range(iteration - len(thisCoinboardLogs[node]) + 1)])
-			#fill missing spaces with 'None'
+			thisCoinboardLogs[node].extend([0 for x in range(iteration - len(thisCoinboardLogs[node]) + 1)])
+			#fill missing spaces with '0'
 		if thisCoinboardLogs[node][iteration] is None: #set up cell
 			thisCoinboardLogs[node][iteration] = 0
 		thisCoinboardLogs[node][iteration] += 1 if flip_value else -1 #add
@@ -898,9 +924,13 @@ class ByzantineAgreement:
 			if debug_byz:
 				print "Error: Global Coin start called with Coin State >= 1."
 		else:
-			if precessCoin: #precessCoin is basically saying that we've received info for the coinboard to go straight to state 2 already
+			if self.precessCoin: #precessCoin is basically saying that we've received info for the coinboard to go straight to state 2 already
 				self.coinState = 2
 				self._broadcastCoinList()
+				if self.precessCoinII:
+					self.coinState = 3
+					self._finalizeCoinboard() 
+					
 			else:
 				self.coinState = 1 #we're rolling!
 		#we set up the coinboard here (a little)
@@ -930,6 +960,21 @@ class ByzantineAgreement:
 			else:
 				if node in self.goodNodes: #we don't include pre-blacklisted nodes in our count.
 					coinCount += self.coinboardLogs[node][self.iteration]
+		
+		if len(self.epochFlips) < self.iteration:
+			self.epochFlips.extend([0 for x in range(self.iteration - len(self.epochFlips))])
+			
+		if len(self.epochFlips) > self.iteration:
+			if self.epochFlips[self.iteration] != 0:
+				if debug_byz:
+					print "Uh-oh. Went to fill in the result for an interation and it was already filled in. This indicates _finalizeCoinboard was called more than once in an iteration. A bug fix will likely be necessary."
+				raise
+				#This shouldn't happen.
+			else: 
+				self.epochFlips[self.iteration] = 1 if coinCount >= 0 else -1
+		else:
+			self.epochFlips.append(1 if coinCount >= 0 else -1)
+			
 		
 		if self.useCoinValue:
 			self.value = (True,) if coinCount >= 0 else (False,) #the second item is the Decide flag
@@ -1242,7 +1287,7 @@ class ByzantineAgreement:
 		
 	def clearHeldWaveMessages():
 		#called on new iteration. 
-		self.heldMessages['wave'] = {2:sortedlist(key=lambda x: x[0]), 3:sortedlist(key=lambda x: x[0])}
+		self.heldMessages['wave'] = {2:[[],[]], 3:[[],[]]}
 		
 	#coinboard flip messages, and by extension, coinboard epoch/iteration messages, are NEVER cleared (the latter because flip and list messages are stored together in the epoch/iter buckets and we'd want to keep the flip messages). Even if a new iteration starts, old flips will be written into the coinboard to help along anyone else who comes calling.
 	
@@ -1321,7 +1366,7 @@ class ByzantineAgreement:
 			
 			
 	def _processEpoch(self):
-		#the below is the Section 6 (polynomial) Process-Epoch algorithm. This implementation implements the Section 7 (potentially exponential) Process-Epoch algorithm.
+		#the block of text at the bottom of the function is the Section 6 (polynomial) Process-Epoch algorithm. This implementation implements the Section 7 (potentially exponential) Process-Epoch algorithm.
 		
 		#a bit of terminology, first off:
 			# M refers to a matrix of all coin flips written by all nodes in an epoch, the so-called 'god view'. This doesn't actually exist.
@@ -1343,6 +1388,38 @@ class ByzantineAgreement:
 		#1. If a processor p (self) finds a set of processors S (#TODO), of size t (self.fault_bound) or less, and a set of iterations I (#TODO) of size c_1*m (#TODO) or less, such that for EACH iteration in the set, [ the absolute value of the sum of flips from all processors in S ≥ Beta/2 ]:
 		
 			#(This is actually the hardest part of the algorithm. The paper doesn't say HOW to do it. It just says 'Here we assume that a set will be found if it exists, and it may take exponential time.' Like, OK.)
+			
+			#More thoughts on this: "In each iteration, there is a “correct direction” that is unknown to the algorithm. If the global coin is in the correct direction for enough good processors, then Algorithm 1 will succeed in the next iteration." - section 3.1 of King-Saia 
+			#We can't be sure of the true correct direction- there's ways for the adversary to 'split' the coin flip if it's close to neutral. But we can be sure of what we THINK the incorrect direction is, because that's the direction that we see the coin as having fell in that iteration. 
+			
+			#So here's a thought. For each iteration, why not try looking into:
+			## Amount of times in + vs - (obvious look at if skewed)
+			## Percentage of nodes favoring + vs - (favor small percentage)
+		
+			# We know that most iterations, adversary influence won't be detectable. So we SPECIFICALLY look for ones where it is.
+			
+			## ITERATION MEASURES
+			
+			# Likelihood: A combination of: how many nodes are on one side vs the other, and how likely is it? (balanced vs unbalanced)
+			# Success: Who won the 
+			
+			# We can combine those to make a 'suspiciousness' index of iters.
+			
+			## NODE MEASURES
+			
+			# Blacklistability: If you sorted each processor's iteration flip history in descending order (multiplied by the sign of the iteration, ofc), would either end be blacklistable? How about a sliding window of c1*m flips? Would it be high? What would it look like?
+				# I think this makes a good sorting measure. Maybe have a counter for 'blacklistable' and a second counter for 'over half'.
+				
+			# Balance: How often did this processor come out one side vs the other? (DON'T use as sole factor, adversary can fake it)
+			# Balance II: How strong are this processor's swings in one direction vs the other? (Again, don't use as sole factor).
+		
+			#combine this to make a 'suspiciousness' index of nodes?
+			
+			## ALGORITHM (?)
+			
+			# Heuristic driven: Focus on 'suspicious' iters or nodes, then see if there's combs of nodes/iters (favoring suspicious) that work?
+			# Backup plan: order node and iter list from most to least suspicious, then do combinations (sorted) until we find something.
+		
 		
 		#2. Then, for each processor in the set...
 		
@@ -1353,9 +1430,59 @@ class ByzantineAgreement:
 		#4. If the processor's score ≥ 2 * ( 5*sqrt( n*ln(n) ) ) * c_1 * m, then blacklist the processor.
 		
 		
+		########### ACTUAL FUNCTION CODE STARTS HERE, AT THIS INDENT LEVEL ############
 		
+		#as a first step, we need to generate two matrices from the logs, M_p and the version of M_p that has the iteration results multiplied by the sign of the iteration in question. We'll need a dict to map node names to matrix columns, because we're omitting columns that are blacklisted.
+		
+		goodNodeColID = 0
+		nodesToCols = {}
+		matrix_preassembly = []
+		
+		for node in self.goodNodes:
+			nodesToCols[node] = goodNodeColID
+			goodNodeColID += 1
+			
+		#there's a question	to be had about: Do we use the coinboard as it was at the time of accept, or do we get the updated version from later?
+		#this is mostly relevant for iterations that weren't the last one. Additional coin flips might come in later, and so on.
+		
+		#Fortunately, we can toggle which one by using a single index. [0] for original, [1] for updated.
+		epoch_to_process = self.pastCoinboardLogs[self.epoch][0]
+		
+		for node in self.goodNodes:
+			if node not in epoch_to_process:
+				matrix_preassembly.append[[0 for x in range(self.maxIterations)]]
+				continue
+			if len(epoch_to_process[node]) < self.maxIterations:
+				temp = epoch_to_process[node]
+				temp.extend([0 for x in range(self.maxIterations - len(temp))])
+				matrix_preassembly.append(temp)
+			else:
+				matrix_preassembly.append(epoch_to_process[node])
+		
+		matrix_MP = np.stack(matrix_preassembly,axis=1) #the 'axis=1' means each input item in the list gets converted into a column.
+		
+		del matrix_preassembly #this is a BIG variable and we won't need it from hereon.
+		
+		#if len(self.epochFlips) < self.maxIterations:
+			#self.epochFlips.extend([0 for x in range(self.maxIterations - len(self.epochFlips))])
+		
+		if len(self.epochFlips) < self.maxIterations or 0 in self.epochFlips:
+			if debug_byz:
+				print "Error: There's iterations for which this node has NO coinboard flip result. This shouldn't be possible."
+			raise
+			
+		matrix_MP_signed = (matrix_MP.T * self.epochFlips).T #multiply each 'iteration' row by the sign of the flip result of the iteration
 	
-	
+		#now we've got our two matrices, and we're ready to perform some calculations.
+		
+		# Also: One saving grace in all of this is quite possibly that, we don't have to find a set of EXACTLY T nodes that's got this amount in the iteration. We can find a set of LESS THAN T nodes.
+		
+		
+		
+		
+		
+		
+		
 	
 	
 		#TODO
@@ -1552,12 +1679,11 @@ def main(args):
 			elif message['type'] == "node":
 				#reliable broadcast message format: 
 				#metadata has type.
-				#TODO: this code is COMPLETELY messed up.
 				msgType = msgBody[0]
 				if msgType == "rBroadcast":
 					result = ReliableBroadcast.handleRBroadcast(message)
 					if result is not None:
-						#result from Accept. Do stuff. TODO
+						#result from Accept. Do stuff.
 						if type(result['body'][0]) is ByzantineAgreement.MessageMode:
 							msgModeTemp = result['body'][0]
 							#what we need to do here IS: 
