@@ -26,7 +26,7 @@ def init(username, type):
 	__connection = Connection('amqp://') #that should be enough, right?
 	__connection.connect(); #set up NOW
 	#channel = connection.channel()
-	__global_exchange = Exchange('broadcast', type='fanout');
+	__global_exchange = Exchange('broadcast', type='fanout', durable=False, delivery_mode=1); #the 1 means messages are cleared if the server is restarted. For testing purposes.
 	__global_exchange.maybe_bind(__connection) #this should prevent the same exchange from being bound twice by multiple nodes. I think.
 	__producer = __connection.Producer(__connection)
 	__my_queue = Queue(username+'-q', exchange=__global_exchange, routing_key=username+'-q')
@@ -48,8 +48,11 @@ def send(message,metadata,destination):
 	#MODULAR - replace this code with whatever network functionality.
 	return
 
-def sendAll(message,metadata):
-	__producer.publish(message,exchange=__global_exchange,headers={"type":__my_type,"sender":__username,"meta":metadata})
+def sendAll(message,metadata,type_override=None):
+	if type_override is not None:
+		__producer.publish(message,exchange=__global_exchange,headers={"type":type_override,"sender":__username,"meta":metadata})
+	else:
+		__producer.publish(message,exchange=__global_exchange,headers={"type":__my_type,"sender":__username,"meta":metadata})
 	#IMPORTANT: for reliable broadcast, "send to all" means yourself too.
 	#MODULAR - replace this code with whatever network functionality.
 	return
@@ -60,6 +63,13 @@ def receive_next():
 	#receiving should NOT ignore messages from oneself. This is required for reliable broadcast.
 	if message is None:
 		return None
-	
-	return {'body': message.decode(), 'type': message.headers.type, 'sender': message.headers.sender, 'meta': message.headers.meta}
+	try:
+		return {'body': message.decode(), 'type': message.headers['type'], 'sender': message.headers['sender'], 'meta': message.headers['meta']}
+	except Exception as e:
+		print "Something went wrong with message receiving. Message:"
+		print repr(message)
+		print "Body: "+repr(message.body)
+		print "Headers: "+repr(message.headers)
+		print "Error: "+repr(e)
+		return
 	#MODULAR - replace this code with whatever network functionality.
