@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 from __future__ import division
-from sys import argv
+from sys import argv, exit
 from time import sleep
 from string import split
 import multibyz_kingsaia_network as MessageHandler
@@ -83,8 +83,14 @@ import multibyz_kingsaia_network as MessageHandler
 def main(args):
 	#args = my user ID, the number of nodes. For the time being, we're not passing around node IDs but eventually we WILL need everyone to know all the node ids.
 	print "Starting up..."
-	if len(args) > 0:
-		MessageHandler.init(args[0],"client")
+	
+	decision_IDs = {}
+	
+	num_nodes = int(args[0])
+	fault_bound = (num_nodes - 1) // 3  #t < n/3. Not <=.
+	
+	if len(args) > 1:
+		MessageHandler.init(args[1],"client")
 	else:
 		MessageHandler.init("client","client") #anonymous client
 	while True:
@@ -97,8 +103,8 @@ def main(args):
 			weSaidNoMessages = False
 			#print message.headers
 			#print message.body
-
-			type = message.headers['type']
+			print repr(message)
+			type = message['type']
 			
 			if type == "client":
 				pass #We sent this message. Ignore it.
@@ -107,27 +113,57 @@ def main(args):
 			elif type == "announce":
 				print "Announcement to client: "
 				print message.body
-				#announce to client - IGNORE
+			elif type == "decide":
+				#We're assuming the adversary won't misformat decide messages.
+				byzID = message['meta']
+				if byzID not in decision_IDs:
+					decision_IDs[byzID] = [[],[],None,None]
+				sender = message['sender']
+				decision = message['body']
+				if sender not in decision_IDs[byzID][1 if decision else 0]:
+					print "Received deciding message from node {} for byzantine ID {}: {}.".format(sender, byzID, decision)
+					decision_IDs[byzID][1 if decision else 0].append(sender)
+					
+					if decision_IDs[byzID][2] == None and len(decision_IDs[byzID][1 if decision else 0]) >= fault_bound + 1:
+						decision_IDs[byzID][2] = [True if decision else False]
+						print "Accepting decision for byzantine ID {}: {}.",format(byzID, decision)
+					
+					if decision_IDs[byzID][3] == None and len(decision_IDs[byzID][1 if decision else 0]) >= num_nodes // 2:
+						decision_IDs[byzID][3] = [True if decision else False]
+						print "Received decision majority for byzantine ID {}: {}.",format(byzID, decision)	
+						
+						if decision_IDs[byzID][2] != decision_IDs[byzID][3]:
+							print "Warning: Majority and accepted decision don't match!"
+					
+				else:
+					print "Duplicate deciding message received from node {}.".format(sender)
+					
+			elif type == "halt":
+				#this is for local-machine testing purposes only - it makes every node exit. Assume the adversary can't do this.
+				#exit(0)	
 				pass
 			else: 
 				print "Unknown message received."
-				print message.headers
-				print message.body
+				print repr(message)
 				pass #malformed headers! Throw an error? Drop? Request resend?
 				
 			
 				
-
-		message = raw_input("Ready to send a client request - enter a destination, '::', message. > ")
-		if message != "":
-			try:
-				dest, message2 = split(message,"::",1)
-				dest = int(dest)
-				MessageHandler.send(("broadcast",message2),dest)
-				print "Message sent to "+str(dest)+"."
-			except ValueError:
-				MessageHandler.sendAll(("broadcast",message))
-				print "Message sent to all nodes."
+		try:
+			message = raw_input("Ready to send a client request - enter a destination, '::', message. > ")
+			if message != "":
+				try:
+					dest, message2 = split(message,"::",1)
+					dest = int(dest)
+					MessageHandler.send(("broadcast",message2),dest)
+					print "Message sent to "+str(dest)+"."
+				except ValueError:
+					MessageHandler.sendAll(("broadcast",message))
+					print "Message sent to all nodes."
+		except KeyboardInterrupt:
+			print
+			print "Shutting down."
+			exit(0)
 
 		
 if __name__ == "__main__":
