@@ -57,6 +57,7 @@ debug_byz = True
 		
 username = None
 num_nodes = 0
+all_nodes = []
 fault_bound = 0
 message_counter = 0
 
@@ -444,7 +445,7 @@ class ByzantineAgreement:
 		
 		
 		#aka Bracha Wave 1
-		ReliableBroadcast.broadcast((MessageMode.bracha, 1, self.value),extraMeta=(self.ID,self.epoch,self.iteration)):
+		ReliableBroadcast.broadcast((MessageMode.bracha, 1, self.value),extraMeta=(self.ID,self.epoch,self.iteration))
 		#also, count myself (free).
 		self.brachabits[username][1] = self.value
 		if self.brachabits[username][0]: #if we're a good node:
@@ -515,7 +516,7 @@ class ByzantineAgreement:
 				self.log("Throwing out impossible bracha message from {} via {}, invalid message type {}.".format(rbid[0],message['sender'],type(msgValue)))
 				return
 			
-		except TypeError, ValueError, IndexError:
+		except (TypeError, ValueError, IndexError):
 			self.log("Value error. Message from {} via {} had to be discarded.".format(rbid[0],message['sender']))
 			return 
 			
@@ -871,9 +872,8 @@ class ByzantineAgreement:
 						self.precessCoinII = True
 			else:
 				if list_looks_OK == False:
-				
 				#TODO: list_looks_OK will be None if there was an error. Handle this error.
-				self.holdCoinListForLater(message, coin_list) #TODO: Will this ever trigger? Surely the checkCoinboardHolding will catch it first, right?
+					self.holdCoinListForLater(message, coin_list) #TODO: Will this ever trigger? Surely the checkCoinboardHolding will catch it first, right?
 				#hold list for later
 			
 		else:
@@ -1076,7 +1076,7 @@ class ByzantineAgreement:
 		if (message_i,message_j) not in self.heldMessages['coin_flip'][(self.epoch,self.iteration)]:
 			self.heldMessages['coin_flip'][(self.epoch,self.iteration)][(message_i,message_j)] = blist()
 		#multiple messages can be stored under the same i,j - reliable broadcast creates many copies!
-		self.heldMessages['coin_flip'](self.epoch,self.iteration)][(message_i,message_j)].append(message)
+		self.heldMessages['coin_flip'][(self.epoch,self.iteration)][(message_i,message_j)].append(message)
 		
 		
 	def checkListVsCoinboard(list,coinboard):
@@ -1107,7 +1107,7 @@ class ByzantineAgreement:
 				
 			return False, stuff_to_fulfill
 				
-		except ValueError, KeyError, IndexError:
+		except (ValueError, KeyError, IndexError):
 			return None, None		
 		
 		
@@ -1240,9 +1240,14 @@ class ByzantineAgreement:
 			#refresh: on receiving a new message of the previous wave, or at least enough messages of the previous wave
 		#This function goes through the message held list in order and feeds it to the validator one by one. We stop when we reach where the end of the message held list was when we started. Then we take only the new bit and it becomes the held messages queue.
 	
-	def checkHeldCoinFlipMessages(self, target_i,target_j,searchEpoch=self.epoch,searchIteration=self.iteration):
+	def checkHeldCoinFlipMessages(self, target_i,target_j,searchEpoch=None,searchIteration=None):
 	#somewhat contrary to the name, this RELEASES held coin flip messages for the specific thing. 
 	#it is only to be called if enough acknowledgements have been received for that reliable broadcast message to be participated in, as it bypasses reverification.
+		if searchEpoch is None:
+			searchEpoch = self.epoch
+		if searchIteration is None:
+			searchIteration = self.iteration
+	
 		if (searchEpoch,searchIteration) not in self.heldMessages['coin_flip']:
 			return
 		if (target_i,target_j) not in self.heldMessages['coin_flip'][(searchEpoch,searchIteration)]:
@@ -1267,7 +1272,7 @@ class ByzantineAgreement:
 						#TODO: For efficiency, this should probably be here under the check that we cleared something. But what if a {} (ready to go) list ends up here? It'll never be released. Fix this... maybe check when storing?
 				
 		
-	def clearHeldEpochMessages(self.epoch):
+	def clearHeldEpochMessages(self,epoch):
 		#called on reset. Removes only epochs that are previous to the current epoch.
 		#we're OK with wiping this on a reset, as we're completely giving up on the past epochs.
 		self.heldMessages['epoch'] = { key:value for key,value in self.heldMessages['epoch'].iteritems() if key >= self.epoch}
@@ -1302,7 +1307,7 @@ class ByzantineAgreement:
 		#if they are equal, we stay where we are.
 		
 		#Bracha Wave 2
-		ReliableBroadcast.broadcast((MessageMode.bracha, 2, self.value),extraMeta=(self.ID,self.epoch,self.iteration)):
+		ReliableBroadcast.broadcast((MessageMode.bracha, 2, self.value),extraMeta=(self.ID,self.epoch,self.iteration))
 		#also, count myself (free).
 		self.brachabits[username][2] = self.value
 		
@@ -1321,7 +1326,7 @@ class ByzantineAgreement:
 			self.value = (self.value[0],False) #no decide
 		
 		#Bracha Wave 3
-		ReliableBroadcast.broadcast((MessageMode.bracha, 3, self.value),extraMeta=(self.ID,self.epoch,self.iteration)):
+		ReliableBroadcast.broadcast((MessageMode.bracha, 3, self.value),extraMeta=(self.ID,self.epoch,self.iteration))
 		#also, count myself (free).
 		self.brachabits[username][3] = self.value[0]
 
@@ -1382,11 +1387,11 @@ class ByzantineAgreement:
 			
 		#the steps of this algorithm are as follows:
 		
-		#1. If a processor p (self) finds a set of processors S (#TODO), of size t (self.fault_bound) or less, and a set of iterations I (#TODO) of size c_1*m (#TODO) or less, such that for EACH iteration in the set, [ the absolute value of the sum of flips from all processors in S ≥ Beta/2 ]:
+		#1. If a processor p (self) finds a set of processors S (#TODO), of size t (self.fault_bound) or less, and a set of iterations I (#TODO) of size c_1*m (#TODO) or less, such that for EACH iteration in the set, [ the absolute value of the sum of flips from all processors in S >= Beta/2 ]:
 		
 			#(This is actually the hardest part of the algorithm. The paper doesn't say HOW to do it. It just says 'Here we assume that a set will be found if it exists, and it may take exponential time.' Like, OK.)
 			
-			#More thoughts on this: "In each iteration, there is a “correct direction” that is unknown to the algorithm. If the global coin is in the correct direction for enough good processors, then Algorithm 1 will succeed in the next iteration." - section 3.1 of King-Saia 
+			#More thoughts on this: "In each iteration, there is a "correct direction" that is unknown to the algorithm. If the global coin is in the correct direction for enough good processors, then Algorithm 1 will succeed in the next iteration." - section 3.1 of King-Saia 
 			#We can't be sure of the true correct direction- there's ways for the adversary to 'split' the coin flip if it's close to neutral. But we can be sure of what we THINK the incorrect direction is, because that's the direction that we see the coin as having fell in that iteration. 
 			
 			#So here's a thought. For each iteration, why not try looking into:
@@ -1424,7 +1429,7 @@ class ByzantineAgreement:
 		
 		#3B. Add that sum to the processor's score.
 		
-		#4. If the processor's score ≥ 2 * ( 5*sqrt( n*ln(n) ) ) * c_1 * m, then blacklist the processor.
+		#4. If the processor's score >= 2 * ( 5*sqrt( n*ln(n) ) ) * c_1 * m, then blacklist the processor.
 		
 		
 		########### ACTUAL FUNCTION CODE STARTS HERE, AT THIS INDENT LEVEL ############
@@ -1506,7 +1511,9 @@ class ByzantineAgreement:
 	def _decide(self,value):
 		#self._decide(True if deciding_value == 1 else False)
 		self.decided = True
-		self.decision = True if deciding_value == 1 else False	
+		self.decision = value #should be boolean  #True if value == 1 else False	
+		MessageHandler.sendAll(self.decision,self.ID,"decide") #type override
+		
 		#TODO: Notify decision here.
 		
 	def checkCoinboardMessageHolding(self,message):
@@ -1534,7 +1541,7 @@ class ByzantineAgreement:
 				message_j = message['body'][2]
 			if messageCoinMode == MessageMode.coin_list:
 				message_list = message['body'][1]
-		except TypeError, ValueError, IndexError:
+		except (TypeError, ValueError, IndexError):
 			if debug_byz:
 				print "Value error. Reliable? message from {} via {} had to be discarded.".format(rbid[0], message['sender'])
 			return False #TODO: Is 'discard' the best thing here?
@@ -1615,6 +1622,7 @@ def getAllNodes():
 	#this is the answer. When called, it gives the node list AT THE TIME OF THE CALL. Then that sticks to the instance object thereafter.
 	
 	#MODULAR - this function is modular and is expected to be swapped out given whatever's your requirements.
+	return all_nodes
 	pass
 	#TODO - this function also needs to be completed, too.
 
@@ -1631,9 +1639,13 @@ def main(args):
 		
 	
 	username = args[0]
+	with open(args[1]) as node_list:
+		all_nodes = [line for line in node_list]
+	
 	MessageHandler.init(username,"node")
-	num_nodes = int(args[1])
-	fault_bound = num_nodes // 3 - 1 if num_nodes % 3 == 0 else num_nodes // 3 #t < n/3. Not <=.
+	
+	num_nodes = len(all_nodes)
+	fault_bound = (num_nodes - 1) // 3  #t < n/3. Not <=.
 	print "Maximum adversarial nodes: {}/{}.".format(fault_bound, num_nodes)
 	weSaidNoMessages = False 
 	while True:
@@ -1657,7 +1669,7 @@ def main(args):
 				code = message['meta']['code']
 				if code == "broadcast":
 					print "Client message received: broadcast {}.".format(repr(message['body']))
-					ReliableBroadcast.broadcast(message['body']])
+					ReliableBroadcast.broadcast(message['body'])
 				elif code == "byzantine":
 					#a conundrum. How do nodes AGREE to start a byzantine agreement instance?
 					#for the time being, the client notifies every node and gives them an initial value - ideal for testing.
@@ -1703,16 +1715,20 @@ def main(args):
 						print "Accepted message: "+repr(result)
 				else:
 					print "Unknown node message received."
-					print message.headers
-					print message.body
+					print repr(message)
 					pass #TODO: throw error on junk message. Or just drop it.
+			elif type == "decide":
+				#someone's deciding - IGNORE
+				pass
 			elif type == "announce":
 				#announce to client - IGNORE
 				pass
+			elif type == "halt":
+				#this is for local-machine testing purposes only - it makes every node exit. Assume the adversary can't do this.
+				exit(0)
 			else: 
 				print "Unknown message received."
-				print message.headers
-				print message.body
+				print repr(message)
 				pass #malformed headers! Throw an error? Drop? Request resend?
 				
 			
