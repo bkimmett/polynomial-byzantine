@@ -38,21 +38,21 @@ def main(args):
 	#launch nodes
 	for node in node_names:
 		print "Starting {}.".format(node)
-		Popen(['python', 'multibyz_kingsaia_node.py', node, 'multibyz_kingsaia_nodenames'], stdout=open('logs/log_'+node,'a') ) #stderror resolves on to this stdout
+		Popen(['python', 'multibyz_kingsaia_node.py', node, 'multibyz_kingsaia_nodenames'] )#, stdout=open('logs/log_'+node+'.txt','a',0) ) #stderror resolves on to this stdout. the '0' at the end makes all writes to log files immediate.
 		
 	#launch client
 	#maybe this gets done manually for UI?
 	try:
-		call(['python', 'multibyz_kingsaia_client.py', str(num_nodes)])
-	except KeyboardInterrupt:
-		pass #swallow Ctrl-C
+		call(['python', 'multibyz_kingsaia_client.py', 'multibyz_kingsaia_nodenames'])
+	except KeyboardInterrupt, SystemExit:
+		pass #swallow Ctrl-C and graceful halt
 		#'call' instead of 'Popen' means this will WAIT for the process to return.
 	
 		#after this point, we're done, and are doing shutdown.
 	
 		#halt all
-		MessageHandler.init("HaltHandler","halt") #anonymous client
-		MessageHandler.sendAll(None,None) #send empty halt message
+	MessageHandler.init("HaltHandler","halt") #anonymous client
+	MessageHandler.sendAll(None,None) #send empty halt message
 	
 		#halt server also needs to be done manually. Or you can leave it up for when you go again.
 	

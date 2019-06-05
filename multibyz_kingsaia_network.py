@@ -64,7 +64,7 @@ def receive_next():
 	if message is None:
 		return None
 	try:
-		return {'body': message.decode(), 'type': message.headers['type'], 'sender': message.headers['sender'], 'meta': message.headers['meta']}
+		return {'body': message.decode(), 'type': message.headers['type'], 'sender': message.headers['sender'], 'meta': message.headers['meta'], 'raw': message.body}
 	except Exception as e:
 		print "Something went wrong with message receiving. Message:"
 		print repr(message)
