@@ -5,12 +5,8 @@ from math import log, ceil
 from itertools import permutations
 from random import sample
 from subprocess import Popen, call
-import os
-
-
+from os import mkdir
 from sys import argv
-from time import sleep
-from string import split
 import multibyz_kingsaia_network as MessageHandler
 
 def main(args):
@@ -23,13 +19,13 @@ def main(args):
 	#make a list of node names, in the form 'node1_CZY' where the bit after the underscore is a randomized tag, unique within this run. As many letters after the underscore will be used as necessary for all combinations to have a unique tag.
 	
 	#write node list
-	with open('multibyz_kingsaia_nodenames','w') as file:
+	with open('multibyz_kingsaia_nodenames','w') as thisFile:
 		for name in node_names:
-			file.write(name+'\n')
+			thisFile.write(name+'\n')
 	
 	#make logs dir
 	try:
-		os.mkdir('logs/')
+		mkdir('logs/')
 	except OSError:
 		pass #dir already exists
 	
@@ -44,7 +40,7 @@ def main(args):
 	#maybe this gets done manually for UI?
 	try:
 		call(['python', 'multibyz_kingsaia_client.py', 'multibyz_kingsaia_nodenames'])
-	except KeyboardInterrupt, SystemExit:
+	except (KeyboardInterrupt, SystemExit):
 		pass #swallow Ctrl-C and graceful halt
 		#'call' instead of 'Popen' means this will WAIT for the process to return.
 	
@@ -57,4 +53,4 @@ def main(args):
 		#halt server also needs to be done manually. Or you can leave it up for when you go again.
 	
 if __name__ == "__main__":
-    main(argv[1:])	
+	main(argv[1:])	

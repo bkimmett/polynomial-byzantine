@@ -1,5 +1,5 @@
-from kombu import Connection, Queue, Producer, Consumer, Exchange
-from kombu.common import drain_consumer
+from kombu import Connection, Queue, Exchange #, Producer, Consumer
+#from kombu.common import drain_consumer
 #getting an error with the above line? 'pip install kombu'
 
 __connection = None
@@ -18,15 +18,15 @@ __my_type = None
 #INITIAL SENDER OF RBROADCAST SHOULD ADD A NONCE to avoid same message sent twice being ignored second time. A counter and its sender ID should be sufficient.
 #'sender' is assigned by the receiver module
 
-def init(username, type):
+def init(username, msgtype):
 	global __username, __my_type, __connection, __global_exchange, __producer, __my_queue
 	__username = username
-	__my_type = type
+	__my_type = msgtype
 	print "Username: "+username
 	__connection = Connection('amqp://') #that should be enough, right?
-	__connection.connect(); #set up NOW
+	__connection.connect() #set up NOW
 	#channel = connection.channel()
-	__global_exchange = Exchange('broadcast', type='fanout', durable=False, delivery_mode=1); #the 1 means messages are cleared if the server is restarted. For testing purposes.
+	__global_exchange = Exchange('broadcast', type='fanout', durable=False, delivery_mode=1) #the 1 means messages are cleared if the server is restarted. For testing purposes.
 	__global_exchange.maybe_bind(__connection) #this should prevent the same exchange from being bound twice by multiple nodes. I think.
 	__producer = __connection.Producer(__connection)
 	__my_queue = Queue(username+'-q', exchange=__global_exchange, routing_key=username+'-q')
@@ -71,5 +71,5 @@ def receive_next():
 		print "Body: "+repr(message.body)
 		print "Headers: "+repr(message.headers)
 		print "Error: "+repr(e)
-		return
+		return None
 	#MODULAR - replace this code with whatever network functionality.
