@@ -73,11 +73,11 @@ def main(args):
 					
 						if decision_IDs[byzID][2] == None and len(decision_IDs[byzID][1 if decision else 0]) >= fault_bound + 1:
 							decision_IDs[byzID][2] = [True if decision else False]
-							print "Accepting decision for byzantine ID {}: {}.",format(byzID, decision)
+							print "Accepting decision for byzantine ID {}: {}.".format(byzID, decision)
 					
-						if decision_IDs[byzID][3] == None and len(decision_IDs[byzID][1 if decision else 0]) >= num_nodes // 2:
+						if decision_IDs[byzID][3] == None and len(decision_IDs[byzID][1 if decision else 0]) >= num_nodes // 2 + 1:
 							decision_IDs[byzID][3] = [True if decision else False]
-							print "Received decision majority for byzantine ID {}: {}.",format(byzID, decision)	
+							print "Received decision majority for byzantine ID {}: {}.".format(byzID, decision)	
 						
 							if decision_IDs[byzID][2] != decision_IDs[byzID][3]:
 								print "Warning: Majority and accepted decision don't match!"
@@ -107,13 +107,18 @@ def main(args):
 							
 					if command == "msg":
 						dest, message3 = split(message2+" ", " ", 1)
-						MessageHandler.send(message3[:-1],{'code':'broadcast'},dest)
+						MessageHandler.send(message3[:-1],{'code':'message'},dest)
 						#send format: message, dest, meta
 						print "Message sent to {}.".format(dest)
 					elif command == "msgall":
-						MessageHandler.sendAll(message2,{'code':'broadcast'})
+						MessageHandler.sendAll(message2,{'code':'message'})
 						#send format: message, meta
 						print "Message sent to everyone."
+					elif command == "rb":
+						dest, message3 = split(message2+" ", " ", 1)
+						MessageHandler.send(message3[:-1],{'code':'broadcast'},dest)
+						#send format: message, dest, meta
+						print "Message sent to {} to be broadcast.".format(dest)
 					elif command == "byz": 
 						byz_ids_so_far += 1
 						byz_id = "{}-{}".format("".join([random_generator.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ') for _ in range(10)]),byz_ids_so_far)

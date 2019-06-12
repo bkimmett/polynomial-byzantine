@@ -15,7 +15,7 @@ def main(args):
 		
 	num_nodes = int(args[0])
 		
-	node_names = ['node{}_{}'.format(i+1,key) for i, key in enumerate(sample(["".join(item) for item in permutations('ABCDEFGHIJKLMNOPQRSTUVWXYZ', ceil(log(num_nodes, 26)))], num_nodes))]
+	node_names = ['node{}_{}'.format(i+1,key) for i, key in enumerate(sample(["".join(item) for item in permutations('ABCDEFGHIJKLMNOPQRSTUVWXYZ', ceil(log(num_nodes, 26))+1)], num_nodes))]
 	#make a list of node names, in the form 'node1_CZY' where the bit after the underscore is a randomized tag, unique within this run. As many letters after the underscore will be used as necessary for all combinations to have a unique tag.
 	
 	#write node list
@@ -34,7 +34,7 @@ def main(args):
 	#launch nodes
 	for node in node_names:
 		print "Starting {}.".format(node)
-		Popen(['python', 'multibyz_kingsaia_node.py', node, 'multibyz_kingsaia_nodenames'] )#, stdout=open('logs/log_'+node+'.txt','a',0) ) #stderror resolves on to this stdout. the '0' at the end makes all writes to log files immediate.
+		Popen(['python', 'multibyz_kingsaia_node.py', node, 'multibyz_kingsaia_nodenames'], stdout=open('logs/log_'+node+'.txt','a',0) ) #stderror resolves on to this stdout. the '0' at the end makes all writes to log files immediate.
 		
 	#launch client
 	#maybe this gets done manually for UI?

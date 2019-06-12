@@ -7,6 +7,7 @@ from time import sleep, strftime 	#to wait for messages, and for logging
 from math import floor, sqrt, log 			#utility
 from copy import deepcopy 		#utility
 import numpy as np 				#for matrix operations in _processEpoch
+from json import dumps			#for making UIDs good
 import multibyz_kingsaia_network as MessageHandler 
 #getting an error with the above line? 'pip install kombu'
 import collections				#for data type checking of messages
@@ -17,7 +18,8 @@ from blist import blist 		#containers that offer better performance when they ge
 
 #debug logging
 
-debug_rb = True
+debug_rb = False
+debug_rb_accept = False
 debug_byz = True
 
 
@@ -96,6 +98,14 @@ class ReliableBroadcast: # pylint: disable=no-init
 	
 	#TODO: if receiving receives a message from a node not currently in the network, it should store that in case of that node joining later (and the join being late).
 	#rev: FLEXNODE
+	
+	@classmethod
+	def log(thisClass,message):
+		if debug_rb:
+			global username
+			print "[{}:{}] {}".format(strftime("%H:%M:%S"),username,message)
+			stdout.flush() #force write
+	
 		
 	
 	@classmethod
@@ -108,7 +118,7 @@ class ReliableBroadcast: # pylint: disable=no-init
 	def setupRbroadcastEcho(thisClass,uid):
 		
 		thisClass.broadcasting_echoes[uid] = [False, set(), set(), thisClass.RBPhase.initial] #no initial received, no echoes received, no readies received, Phase no. 1
-		print "Setting up broadcast tracking entry for key < {} >.".format(repr(uid))
+		thisClass.log("Setting up broadcast tracking entry for key < {} >.".format(repr(uid)))
 	
 	#metadata format:
 	#every message is either a client message or node (reliable broadcast) message or node (manual) message.
@@ -135,7 +145,7 @@ class ReliableBroadcast: # pylint: disable=no-init
 		
 		MessageHandler.sendAll(message,{'phase':thisClass.RBPhase.initial,'rbid':(username,message_counter,extraMeta)})
 		#MessageHandler.sendAll(("rBroadcast","initial",(username, message_counter, message),None),("rBroadcast","initial",username, message_counter,)) 
-		print "SENDING INITIAL reliable broadcast message for key < {} > to all.".format(repr(message))
+		thisClass.log("SENDING INITIAL reliable broadcast message for key < {} > to all.".format(repr(message)))
 		message_counter += 1
 		#We don't need to call setupRbroadcastEcho yet. The first person to receive the 'initial' message will be-- us! And it'll happen then.
 		#Also notably, we don't need a node list to broadcast. We just broadcast to EVERYBODY. Nodes will throw out messages that aren't on their list of participants in a byzantine instance.
@@ -159,8 +169,8 @@ class ReliableBroadcast: # pylint: disable=no-init
 		
 		if phase == thisClass.RBPhase.initial and sender != rbid[0]:
 			#We have a forged initial message. Throw.
-			print "Received forged initial reliable broadcast message from node {} ().".format(sender)
-			#TODO: actually throw.
+			thisClass.log("Error: Received forged initial reliable broadcast message from node {}.".format(sender))
+			#TODO: maybe blacklist the sender?
 			return None
 			
 		#TODO: Security measure. If an Initial message says (in the UID) it is from sender A, and the sender data says it is from sender B, throw an exception based on security grounds. Maybe dump that message. Effectively, that node is acting maliciously.
@@ -173,7 +183,6 @@ class ReliableBroadcast: # pylint: disable=no-init
 			if len(data) > 0:
 				if data[0] == ByzantineAgreement.MessageMode.coin_flip or data[0] == ByzantineAgreement.MessageMode.coin_list or data[0] == ByzantineAgreement.MessageMode.coin_ack or data[0] == ByzantineAgreement.MessageMode.bracha:
 					is_byzantine_related = True #probably true, anyway. Sadly, I'm doing the old C way of comparing to an obscured constant as opposed to a class instance, because the serialization method (JSON) I'm using can't send objects/custom data types. And switching to an upgraded serializer (pickle) would be flagrantly insecure, to where it would be REALLY EASY for an adversary to take over every node at once by sending a malicious broadcast message. Ripperoni.
-					print "It's Byzantine."
 		except TypeError:
 			pass #it's not byzantine
 			
@@ -195,54 +204,51 @@ class ReliableBroadcast: # pylint: disable=no-init
 		except Exception as err:
 			#TODO: What kind of exceptions can be fired here?
 			print err
+			raise err
 		
 		
 		
-		uid = (tuple(rbid),message['raw']) #for storage in the log
+		uid = (dumps(rbid),message['raw']) #for storage in the log
 		#print "Making UID {}".format(uid)
 	
-		
-		if uid not in thisClass.broadcasting_echoes:
-			thisClass.setupRbroadcastEcho(uid) #TODO: A concern is that a spurious entry could be created after [A] a finished entry is removed and a message arrives late, [B] a malformed entry arrives [C] a malicious entry arrives. In the real world, is there a timeout for rbroadcast pruning? (something on the line of a day to a week, something REALLY BIG) How much storage space for rbroadcast info do we HAVE, anyway?
+		try:
+			if uid not in thisClass.broadcasting_echoes:
+				thisClass.setupRbroadcastEcho(uid) #TODO: A concern is that a spurious entry could be created after [A] a finished entry is removed and a message arrives late, [B] a malformed entry arrives [C] a malicious entry arrives. In the real world, is there a timeout for rbroadcast pruning? (something on the line of a day to a week, something REALLY BIG) How much storage space for rbroadcast info do we HAVE, anyway?
 			
-			#there's also the concern that if a node shuts down (unexpectedly?) it loses all broadcast info. Could be resolved by just counting that node towards the fault bound OR semipersistently storing broadcast info.
-		
-		
+				#there's also the concern that if a node shuts down (unexpectedly?) it loses all broadcast info. Could be resolved by just counting that node towards the fault bound OR semipersistently storing broadcast info.
+		except TypeError:
+			thisClass.log("Error - Invalid UID: {}".format(uid))
+			return None		
 		
 		#by using sets of sender ids, receiving ignores COPIES of messages to avoid adversaries trying to pull a replay attack.
 		
 		if phase == thisClass.RBPhase.initial:
 			thisClass.broadcasting_echoes[uid][0] = True #initial received!!
-			if debug_rb:
-				print "Received INITIAL reliable broadcast message for key < {} > from node {}.".format(repr(uid),sender)
+			thisClass.log("Received INITIAL reliable broadcast message for key < {} > from node {}.".format(repr(uid),sender))
 		elif phase == thisClass.RBPhase.echo:
 			thisClass.broadcasting_echoes[uid][1].add(sender)
-			if debug_rb:
-				print "Received ECHO reliable broadcast message for key < {} > from node {}.".format(repr(data),sender)
-				if thisClass.broadcasting_echoes[uid][3] == thisClass.RBPhase.initial or thisClass.broadcasting_echoes[uid][3] == thisClass.RBPhase.echo:
-					print "Initial/Echo Phase: {}/{} of {} echo messages so far.".format(len(thisClass.broadcasting_echoes[uid][1]), (thisClass.num_nodes + thisClass.fault_bound) / 2, thisClass.num_nodes) #print how many echoes we need to advance
-				else:
-					print "{} of {} echo messages.".format(len(thisClass.broadcasting_echoes[uid][1]), thisClass.num_nodes) #just print how many echoes
+			thisClass.log("Received ECHO reliable broadcast message for key < {} > from node {}.".format(repr(data),sender))
+			if thisClass.broadcasting_echoes[uid][3] == thisClass.RBPhase.initial or thisClass.broadcasting_echoes[uid][3] == thisClass.RBPhase.echo:
+				thisClass.log("Initial/Echo Phase: {}/{} of {} echo messages so far.".format(len(thisClass.broadcasting_echoes[uid][1]), (thisClass.num_nodes + thisClass.fault_bound) / 2, thisClass.num_nodes)) #print how many echoes we need to advance
+			else:
+				thisClass.log("{} of {} echo messages.".format(len(thisClass.broadcasting_echoes[uid][1]), thisClass.num_nodes)) #just print how many echoes
 		elif phase == thisClass.RBPhase.ready:
 			thisClass.broadcasting_echoes[uid][2].add(sender)
-			
-			if debug_rb:
-				print "Received READY reliable broadcast message for key < {} > from node {}.".format(repr(data),sender)
-				if thisClass.broadcasting_echoes[uid][3] == thisClass.RBPhase.initial or thisClass.broadcasting_echoes[uid][3] == thisClass.RBPhase.echo:
-					print "Initial/Echo Phase: {}/{} of {} ready messages so far.".format(len(thisClass.broadcasting_echoes[uid][2]), thisClass.fault_bound + 1, thisClass.num_nodes) #print how many readies we need to advance
-				elif thisClass.broadcasting_echoes[uid][3] == thisClass.RBPhase.ready:
-					print "Ready Phase: {}/{} of {} ready messages so far.".format(len(thisClass.broadcasting_echoes[uid][2]), thisClass.fault_bound*2 + 1, thisClass.num_nodes) #print how many readies we need to accept
-				else: 
-					print "{} of {} ready messages.".format(len(thisClass.broadcasting_echoes[uid][2]), thisClass.num_nodes) #print how many readies we got
+
+			thisClass.log("Received READY reliable broadcast message for key < {} > from node {}.".format(repr(data),sender))
+			if thisClass.broadcasting_echoes[uid][3] == thisClass.RBPhase.initial or thisClass.broadcasting_echoes[uid][3] == thisClass.RBPhase.echo:
+				thisClass.log("Initial/Echo Phase: {}/{} of {} ready messages so far.".format(len(thisClass.broadcasting_echoes[uid][2]), thisClass.fault_bound + 1, thisClass.num_nodes)) #print how many readies we need to advance
+			elif thisClass.broadcasting_echoes[uid][3] == thisClass.RBPhase.ready:
+				thisClass.log("Ready Phase: {}/{} of {} ready messages so far.".format(len(thisClass.broadcasting_echoes[uid][2]), thisClass.fault_bound*2 + 1, thisClass.num_nodes)) #print how many readies we need to accept
+			else: 
+				thisClass.log("{} of {} ready messages.".format(len(thisClass.broadcasting_echoes[uid][2]), thisClass.num_nodes)) #print how many readies we got
 		else:
 			#error!: throw exception? for malformed data
-			if debug_rb:
-				print "Received invalid reliable broadcast message from node {} ({}).".format(sender,phase)
-				return None
+			thisClass.log("Received invalid reliable broadcast message from node {} ({}).".format(sender,phase))
+			return None
 			
 			
 		if thisClass.checkRbroadcastEcho(data,rbid,uid): #runs 'check message' until it decides we're done handling any sort of necessary sending	
-			#print "Returning accepted message."
 			return message #original packed message is fastballed back towards the client, as the validate functions the client will pass it on to use packed format
 			
 		return None
@@ -259,8 +265,7 @@ class ReliableBroadcast: # pylint: disable=no-init
 			#waiting to send echo
 			if thisClass.broadcasting_echoes[uid][0] or len(thisClass.broadcasting_echoes[uid][1]) >= (num_nodes + fault_bound) / 2 or len(thisClass.broadcasting_echoes[uid][2]) >= fault_bound + 1: #one initial OR (n+t)/2 echoes OR t+1 readies
 				#ECHO!
-				if debug_rb:
-					print "SENDING ECHO reliable broadcast message for key < {} > to all.".format(repr(data))
+				thisClass.log("SENDING ECHO reliable broadcast message for key < {} > to all.".format(repr(data)))
 				MessageHandler.sendAll(data,{'phase':thisClass.RBPhase.echo,'rbid':rbid})
 				#MessageHandler.sendAll(("rBroadcast","echo",data,None)) 
 				#4th item in message is debug info
@@ -272,8 +277,7 @@ class ReliableBroadcast: # pylint: disable=no-init
 			#waiting to send ready
 			if len(thisClass.broadcasting_echoes[uid][1]) >= (num_nodes + fault_bound) / 2 or len(thisClass.broadcasting_echoes[uid][2]) >= fault_bound + 1: #(n+t)/2 echoes OR t+1 readies
 				#READY!
-				if debug_rb:
-					print "SENDING READY reliable broadcast message for key < {} > to all.".format(repr(data))
+				thisClass.log("SENDING READY reliable broadcast message for key < {} > to all.".format(repr(data)))
 				MessageHandler.sendAll(data,{'phase':thisClass.RBPhase.ready,'rbid':rbid})
 				#MessageHandler.sendAll(("rBroadcast","ready",data,None)) #message format: type, [phase, data, debuginfo]
 				thisClass.broadcasting_echoes[uid][3] = thisClass.RBPhase.ready #update node phase
@@ -283,7 +287,6 @@ class ReliableBroadcast: # pylint: disable=no-init
 		if thisClass.broadcasting_echoes[uid][3] == thisClass.RBPhase.ready:
 			#waiting to accept
 			if len(thisClass.broadcasting_echoes[uid][2]) >= thisClass.fault_bound*2 + 1: #2t+1 readies only
-				#print "Accepting."
 				#ACCEPT!
 				thisClass.broadcasting_echoes[uid][3] = thisClass.RBPhase.done
 				return thisClass.acceptRbroadcast(data,rbid)
@@ -328,8 +331,10 @@ class ByzantineAgreement:
 	@classmethod
 	def getInstance(thisClass,byzID):
 		try:
-			return thisClass.__byzantine_list__[tuple(byzID)]
-		except (IndexError, TypeError):
+			return thisClass.__byzantine_list__[byzID]
+		except (IndexError, TypeError, KeyError):
+			if debug_byz:
+				print "Tried to get a bad byzantine instance: {}".format(byzID)
 			return None #just in case an invalid ID is passed in
 		
 	#@classmethod
@@ -343,7 +348,7 @@ class ByzantineAgreement:
 	def __init__(self,byzID,byzValue,epochConst=1,iterConst=2):
 		self.ID = byzID
 		self.log("Starting new Byzantine instance. {}".format(byzValue))
-		#TODO: Split what happens next by if the Value is True/False (a single-valued byzantine) or something else (a multi-valued byzantine).
+		#FUTURE: Split what happens next by if the Value is True/False (a single-valued byzantine) or something else (a multi-valued byzantine).
 		self.value = (byzValue,) #a tuple! (The second value is used for 'deciding' later.)
 		self.origValue = (byzValue,)
 		#ASSUMPTION: For now, value should be True or False: a single-valued byzantine thing.
@@ -467,8 +472,8 @@ class ByzantineAgreement:
 		
 		
 		
-		self.brachabits = {node: (True, None, None, None) for node in self.goodNodes}
-		self.brachabits.update({node: (False, None, None, None) for node in self.badNodes})
+		self.brachabits = {node: [True, None, None, None] for node in self.goodNodes}
+		self.brachabits.update({node: [False, None, None, None] for node in self.badNodes})
 		#above is message storage for validation purposes
 		#add a slot for each good node (first dict) and append slots for bad nodes to it (the .update part).
 		#potential perils: if somehow a bad node and a good node have the same identifier (which SHOULD be addressed and filtered for elsewhere), the entry for the bad node will overwrite that of the good one.
@@ -488,7 +493,7 @@ class ByzantineAgreement:
 		#aka Bracha Wave 1
 		ReliableBroadcast.broadcast((ByzantineAgreement.MessageMode.bracha, 1, self.value),extraMeta=(self.ID,self.epoch,self.iteration))
 		#also, count myself (free).
-		self.brachabits[username][1] = self.value
+		self.brachabits[username][1] = self.value[0]
 		if self.brachabits[username][0]: #if we're a good node:
 			self.brachaMsgCtrGood[0][1 if self.value else 0] += 1
 		self.brachaMsgCtrTotal[0][1 if self.value else 0] += 1
@@ -558,10 +563,11 @@ class ByzantineAgreement:
 				return #wave can only be one, two, or three. period.
 			
 			msgValue = message['body'][2]
-			if not isinstance(msgValue, tuple) or (len(msgValue) not in [1,2]) or not all(type(item) is bool for item in msgValue):
+			if not isinstance(msgValue, (tuple,list)) or (len(msgValue) not in [1,2]) or not all(type(item) is bool for item in msgValue):
 				#must be a tuple of 1 or 2 items. First item is value. Second item is wave 3 'decide' flag. Decide flag is ignored if it's a wave1/wave2 message.
 				#TODO - double check. Is everything supposed to be a boolean in this?
 				self.log("Throwing out impossible bracha message from {} via {}, invalid message type {}.".format(rbid[0],message['sender'],type(msgValue)))
+				self.log("Message was {}".format(msgValue))
 				return
 			
 		except (TypeError, ValueError, IndexError):
@@ -632,28 +638,30 @@ class ByzantineAgreement:
 				if msgValue != self.brachabits[rbid[0]][wave]:
 					#wut-oh. In this case, there was a mismatch between a previous message we received and a current message - in the same wave. As in, that was already sent. This is indicative of a faulty node and earns the node a spot on the blackList.
 					self.log("Received the same message with different values from node {}. This smells! Blacklisting.".format(rbid[0]))
+					self.log("Expected {} of type {}, got {} of type {}".format(self.brachabits[rbid[0]][wave], type(self.brachabits[rbid[0]][wave]), msgValue, type(msgValue)))
 					self.blacklistNode(rbid[0]) #remember, a reliable broadcast sender (rbid[0]) can't be forged because it has to match the initial sender of the message, and THAT can't be forged. This property has to hold for this to work.
 					
 				#you'll note there's the end of this if block. If there's a duplicate message, we do nothing; we recorded it already.	
 			else:
-				self.log("Successfully received wave {} bracha message (val: {}) from {}.".format(wave,msgValue,rbid[0]))
 				self.brachabits[rbid[0]][wave] = msgValue
 				#TODO: 'Good' was originally only supposed to apply to Global-Coin, not bracha. Are we supposed to count separately here?
-				if self.brachabits[rbid[0]][0]: #that is, if the node is deemed Good
+				#if self.brachabits[rbid[0]][0]: #that is, if the node is deemed Good
 				###BRACHA NOTE: Remove the above line and de-indent the below block to prevent blacklisting applying to bracha.
-					self.brachaMsgCtrGood[wave-1][1 if msgValue else 0] += 1
-					if self.wave == 3 and msgDecide: #if they're deciding, record it as a deciding message
-						self.brachaMsgCtrGoodDeciding[1 if msgValue else 0] += 1
+				self.brachaMsgCtrGood[wave-1][1 if msgValue else 0] += 1
+				if wave == 3 and msgDecide: #if they're deciding, record it as a deciding message
+					self.brachaMsgCtrGoodDeciding[1 if msgValue else 0] += 1
+				###END OF ABOVE BLOCK		
+		
 				self.brachaMsgCtrTotal[wave-1][1 if msgValue else 0] += 1 
 				
+				self.log("Successfully received {}wave {} bracha message (val: {}) from {}. Count {}:{}".format('deciding ' if (wave == 3 and msgDecide) else '', wave,msgValue,rbid[0],wave,self.brachaMsgCtrGood[wave-1][::-1]))	
+				
 				if self.wave == 1 and sum(self.brachaMsgCtrGood[0]) >= self.num_nodes - self.fault_bound:
-					self.log("Moving to Bracha Wave 2.")
 					self.wave = 2
 					self._brachaWaveTwo()
 					
 				if self.wave == 2:
 					if sum(self.brachaMsgCtrGood[1]) >= self.num_nodes - self.fault_bound:
-						self.log("Moving to Bracha Wave 3.")
 						self.wave = 3
 						self._brachaWaveThree()	
 					
@@ -754,16 +762,15 @@ class ByzantineAgreement:
 				message_j = data[2]
 				if mode == ByzantineAgreement.MessageMode.coin_flip:
 					message_value = data[3]
-			except Exception as err:
-				print err 
-				raise err
-				#TODO: build a better exception handler and handle errors properly
+			except (IndexError,TypeError,KeyError):
+				self.log("Discarding completely invalid coinflip message from {} via {}, missing some data.".format(rbid[0],message['sender']))
+				return			
 		
 			if type(message_i) is not int:
 				self.log("Invalid coinflip message from {} via {}, sync round# type {} instead of integer.".format(rbid[0], message['sender'], type(message_i)))
 				return
 		
-			if message_i < 1 or message_i > self.num_nodes: ###is this the right message_i max?
+			if message_i < 0 or message_i >= self.num_nodes: ###is this the right message_i max?
 				self.log("Invalid coinflip message from {} via {}, impossible round# {}.".format(rbid[0], message['sender'],message_i))
 				return
 		
@@ -788,10 +795,10 @@ class ByzantineAgreement:
 			else:
 				this_coinboard = self.coinboard
 				
-			while len(this_coinboard) < message_i:
+			while len(this_coinboard) <= message_i:
 				this_coinboard.append({}) #add blank extra spaces to fill out board
-			if message_j not in this_coinboard[message_i-1]:
-				this_coinboard[message_i-1][message_j] = [None,set()] #setup record
+			if message_j not in this_coinboard[message_i]:
+				this_coinboard[message_i][message_j] = [None,set()] #setup record
 			
 			##OK, we've done some light validation, now store it.
 			
@@ -801,9 +808,9 @@ class ByzantineAgreement:
 					self.blacklistNode(rbid[0])
 					return
 			
-				if this_coinboard[message_i-1][message_j][0] is None:
+				if this_coinboard[message_i][message_j][0] is None:
 					#no value stored
-					this_coinboard[message_i-1][message_j][0] = message_value
+					this_coinboard[message_i][message_j][0] = message_value
 					
 					if message_from_the_past:
 						self.log("Received historic coin flip #{} from {}, value {}. (e:{} i:{})".format(message_i, message_j, message_value, epoch, iteration))
@@ -820,7 +827,7 @@ class ByzantineAgreement:
 						#Broadcast acknowledgement that we received this message - but only if this is the current coinboard and we haven't sent our own list yet.
 						
 				else:
-					if message_value != this_coinboard[message_i-1][message_j][0]:
+					if message_value != this_coinboard[message_i][message_j][0]:
 						#We have two messages with different values? This isn't supposed to happen. Blacklist the node...
 						self.log("{} sent the same flip twice, with two different values. Discarding/blacklisting.".format(rbid[0]))
 						self.blacklistNode(rbid[0])
@@ -830,16 +837,16 @@ class ByzantineAgreement:
 						
 			
 			if mode == ByzantineAgreement.MessageMode.coin_ack:
-				this_coinboard[message_i-1][message_j][1].append(rbid[0]) #sender of broadcast
+				this_coinboard[message_i][message_j][1].add(rbid[0]) #sender of broadcast
 				self.log("Received acknowledgement from {} for coin flip #{} of node {}.".format(rbid[0], message_i, message_j))
 				#Check number of acknowledgements.
-				if len(this_coinboard[message_i-1][message_j][1]) == self.num_nodes-self.fault_bound:
+				if len(this_coinboard[message_i][message_j][1]) == self.num_nodes-self.fault_bound:
 					self.log("Got enough acknowledgements for coin flip #{} of node {}.".format(message_i, message_j))
 					#we've hit the boundary number of acknowledgements! (n-t)
 					#we trigger this only once - it does things like continue the state.				
 					#we also (if we're in Stage 1) need to check for the number of acknowledgements - if we get enough columns, we move on to stage 2. (If we're in Stage 0, we store that we're ready to move on until Stage 1...)
 					if not message_from_the_past and self.coinState < 2:
-						if message_i == self.num_nodes: #coinboard maxed out? 
+						if message_i == self.num_nodes-1: #coinboard maxed out? 
 							self.log("Column of coin flips complete for node {}.".format(message_j))
 							self.coinColumnsReady += 1
 							if self.coinColumnsReady == self.num_nodes - self.fault_bound:
@@ -870,9 +877,11 @@ class ByzantineAgreement:
 								if self.lastCoinBroadcast < self.num_nodes:
 									coin = self._broadcastCoin(self.lastCoinBroadcast)
 									##TODO: This can never happen while the coinboard is undefined, right?
+									while len(self.coinboard) <= self.lastCoinBroadcast:
+										self.coinboard.append({}) #extend coinboard as needed
 									self.coinboard[self.lastCoinBroadcast][username] = [coin,set()] #TODO: Should this be a sortedset()?
 									#this will overwrite any acks that were already there, but... yeah, how could acks arrive if the coin hadn't been broadcast yet?! Not a concern.		
-									self.coinboard[self.lastCoinBroadcast][username][1].append(username) #acknowledge receipt of our own message.
+									self.coinboard[self.lastCoinBroadcast][username][1].add(username) #acknowledge receipt of our own message.
 					else:
 						#if we reach the set number for someone else's flip, release reliable broadcast for the next in the series, if it exists.
 						#we do this EVEN IN THE CASE OF IT BEING IN THE PAST.
@@ -972,8 +981,7 @@ class ByzantineAgreement:
 		self.coinboard[0][username][0] = coin_value #store our first coin in the coinboard
 		
 		if self.coinState > 0: #0 = waiting 1 = sending coins 2 = sending lists 3 = done?
-			if debug_byz:
-				print "Error: Global Coin start called with Coin State >= 1."
+			self.log("Error: Global Coin start called with Coin State >= 1.")
 		else:
 			if self.precessCoin: #precessCoin is basically saying that we've received info for the coinboard to go straight to state 2 already
 				self.coinState = 2
@@ -994,7 +1002,7 @@ class ByzantineAgreement:
 	def _broadcastCoin(self,message_i):
 		global username, random_generator
 		flip = (random_generator.random() >= .5) #True if >= .5, otherwise False. A coin toss.
-		ReliableBroadcast.broadcast((ByzantineAgreement.MessageMode.coin_flip, message_i, username),extraMeta=(self.ID,self.epoch,self.iteration))
+		ReliableBroadcast.broadcast((ByzantineAgreement.MessageMode.coin_flip, message_i, username,flip),extraMeta=(self.ID,self.epoch,self.iteration))
 		
 		return flip #so we can use it too
 		
@@ -1263,7 +1271,7 @@ class ByzantineAgreement:
 					if debug_byz:
 						lmessages = len(self.heldMessages['wave'][wave][1-i])
 						if lmessages > 0:
-							print "Throwing out {} unvalidateable wave 3 messages. This is indicative of probable adversary activity.".format(lmessages)
+							self.log("Throwing out {} unvalidateable wave 3 messages. This is indicative of probable adversary activity.".format(lmessages))
 					self.heldMessages['wave'][wave][1-i] = [] #if we successfully processed one bucket of wave 3 messages, then the other bucket, if any, are invalid (because you can't have a majority of the other message if you had a majority of this one). So throw those out.
 					break
 			
@@ -1354,12 +1362,14 @@ class ByzantineAgreement:
 			self.value = (False,)
 		if self.brachaMsgCtrGood[0][0] < self.brachaMsgCtrGood[0][1]:
 			self.value = (True,)
+			
+		self.log("Moving to Bracha Wave 2: value is now {}".format(self.value[0]))	
 		#if they are equal, we stay where we are.
 		
 		#Bracha Wave 2
 		ReliableBroadcast.broadcast((ByzantineAgreement.MessageMode.bracha, 2, self.value),extraMeta=(self.ID,self.epoch,self.iteration))
 		#also, count myself (free).
-		self.brachabits[username][2] = self.value
+		self.brachabits[username][2] = self.value[0]
 		
 		if self.brachabits[username][0]: #if we're a good node:
 			self.brachaMsgCtrGood[1][1 if self.value[0] else 0] += 1
@@ -1368,12 +1378,14 @@ class ByzantineAgreement:
 		
 	
 	def _brachaWaveThree(self):
-		if self.brachaMsgCtrGood[0][0] > self.num_nodes // 2:
+		if self.brachaMsgCtrGood[1][0] > self.num_nodes // 2:
 			self.value = (False,True) #decide
-		elif self.brachaMsgCtrGood[0][1] > self.num_nodes // 2:
+		elif self.brachaMsgCtrGood[1][1] > self.num_nodes // 2:
 			self.value = (True,True) #decide
 		else:
 			self.value = (self.value[0],False) #no decide
+			
+		self.log("Moving to Bracha Wave 3: value is now {}, {}deciding".format(self.value[0],'' if self.value[1] else 'not '))
 		
 		#Bracha Wave 3
 		ReliableBroadcast.broadcast((ByzantineAgreement.MessageMode.bracha, 3, self.value),extraMeta=(self.ID,self.epoch,self.iteration))
@@ -1628,7 +1640,8 @@ class ByzantineAgreement:
 					else:
 						acks_count = len(self.coinboard[message_i-1][messageOrigSender][1])
 				except Exception as err:
-					print(err)
+					print err 
+					raise err
 					#TODO: What kind of exceptions do we run into here?
 					
 				if acks_count >= self.num_nodes - self.fault_bound:
@@ -1657,14 +1670,14 @@ class ByzantineAgreement:
 					result, differences = self.checkListVsCoinboard(message_list, self.coinboard, messageOrigSender) 
 					
 				if result is None:
-					if debug_byz: 
-						print "Error processing coin list from {}.".format(messageOrigSender)
+					self.log("Error processing coin list from {}.".format(messageOrigSender))
 					return False
 				if not result:
 					self.holdCoinListForLater(message,differences)
 				return result #passed? T/F
 			except Exception as err:
-				print(err)
+				print err
+				raise err
 				#TODO: What kind of exceptions do we run into here?
 				
 	
@@ -1730,7 +1743,10 @@ def main(args):
 					#TODO: May have fluffed class instantiation.
 					print "Byzantine message received: ID {}, value {}.".format(byzID, byzValue)
 					ByzantineAgreement(byzID, byzValue)
-				
+				elif code == "message":
+					#just a message to say.
+					print "Client message: {}".format(message['body'])
+					stdout.fflush()
 				else:
 					print "Unknown client message received - code: {}.".format(message['meta']['code'])
 					print repr(message) #no other types of client messages implemented yet.
@@ -1744,19 +1760,23 @@ def main(args):
 				if 'phase' in message['meta'] and 'rbid' in message['meta']: #indicating a reliable broadcast message
 					result = ReliableBroadcast.handleRBroadcast(message)
 					if result is not None:
-						#print "Got the accept."
 						#result from Accept. Do stuff.
 						is_byzantine_related = False
 						if isinstance(result['body'][0],collections.Sequence) and len(result['body']) > 0 and (result['body'][0] == ByzantineAgreement.MessageMode.coin_flip or result['body'][0] == ByzantineAgreement.MessageMode.coin_list or result['body'][0] == ByzantineAgreement.MessageMode.coin_ack or result['body'][0] == ByzantineAgreement.MessageMode.bracha):
 							is_byzantine_related = True
 						
 						if is_byzantine_related: #type(result['body'][0]) is ByzantineAgreement.MessageMode:
-							print "Accepted message: "+repr(result)
+							if debug_rb_accept:
+								print "Accepted message: "+repr(result)
+								stdout.flush() #force write
 							msgModeTemp = result['body'][0]
 							#what we need to do here IS: 
 							#strip out everything but the actual message and relevant headers (maybe already done?) - yeah, already done
 							#figure out WHICH BYZANTINE INSTANCE the message belongs to
-							thisInstance = ByzantineAgreement.getInstance(result['meta']['byzID'])
+							thisInstance = ByzantineAgreement.getInstance(result['meta']['rbid'][2][0]) #= byzID
+							
+							if thisInstance is None: #instance not gotten
+								continue #get outta here
 							
 							#take that instance and kick this to it
 							if msgModeTemp == ByzantineAgreement.MessageMode.bracha:
@@ -1769,7 +1789,7 @@ def main(args):
 						else:
 							#If it's a message without a MessageMode, we just print it.
 							print "Accepted reliable broadcast from {}: {}".format(message['meta']['rbid'][0],message['body'])
-	
+							
 				else:
 					print "Unknown node message received."
 					print repr(message) #TODO: throw error on junk message. Or just drop it.
