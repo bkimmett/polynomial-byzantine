@@ -154,6 +154,7 @@ def main(args):
 						
 					elif command == "halt":
 						print "Shutting down."
+						MessageHandler.shutdown()
 						exit(0)
 					elif command == "help":
 						print """Available commands:
@@ -170,6 +171,7 @@ halt - shut down the client. If you're using the runner, this will stop all node
 		except KeyboardInterrupt:
 			print
 			print "Shutting down."
+			MessageHandler.shutdown()
 			exit(0)
 
 		

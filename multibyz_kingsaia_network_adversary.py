@@ -2,6 +2,9 @@ from kombu import Connection, Queue, Exchange #, Producer, Consumer
 #from kombu.common import drain_consumer
 #getting an error with the above line? 'pip install kombu'
 
+### WHAT'S UP WITH THIS FILE? 
+# This file is a variant version of the network library that's used for simulating an adversarial influence on a Byzantine Agreement attempt. It adds additional functions that establish a backchannel to the adversary, used for adversarial filtering/delay of network traffic, and methods for sending from and thereto.
+
 __connection = None
 __producer = None
 #__consumer = None
@@ -11,6 +14,12 @@ __my_queue = None
 __username = None
 __my_type = None
 
+__backchannel = None
+__backch_producer = None
+__adv_exchange = None
+__adv_queue = None
+
+
 #the message format I'm using:
 #(sender, mode, (supplemental info), data)
 #reliable broadcast:
@@ -19,7 +28,7 @@ __my_type = None
 #'sender' is assigned by the receiver module
 
 def init(username, msgtype):
-	global __username, __my_type, __connection, __global_exchange, __producer, __my_queue
+	global __username, __my_type, __connection, __global_exchange, __producer, __my_queue, __backchannel, __backch_producer, __adv_exchange, __adv_queue
 	__username = username
 	__my_type = msgtype
 	print "Username: "+username
@@ -38,10 +47,35 @@ def init(username, msgtype):
 	
 	#__recv_loop =  drain_consumer(__consumer, timeout=1)
 	
+	__backchannel = Connection('amqp://')
+	__backchannel.connect()
+	__adv_exchange = Exchange('adversary', durable=False, delivery_mode=1)
+	__adv_exchange.maybe_bind(__backchannel)
+	__backch_producer = __backchannel.Producer(_backchannel)
+	__adv_queue = Queue(username+'-adv', exchange=__adv_exchange, routing_key=username+'-adv')
+	__adv_queue = __adv_queue(__backchannel)
+	__adv_queue.declare()
+
+
+def init_adversary():
+	global  __backchannel, __backch_producer, __adv_exchange, __adv_queue
+	__backchannel = Connection('amqp://')
+	__backchannel.connect()
+	__adv_exchange = Exchange('adversary', durable=False, delivery_mode=1)
+	__adv_exchange.maybe_bind(__backchannel)
+	__backch_producer = __backchannel.Producer(_backchannel)
+	__adv_queue = Queue('adversary', exchange=__adv_exchange, routing_key='adversary')
+	__adv_queue = __adv_queue(__backchannel)
+	__adv_queue.declare()
+		
+		
 	
 def shutdown():
-	__connection.release()
-
+	if __connection is not None:
+		__connection.release()
+	__backchannel.release()	
+	
+	
 
 def send(message,metadata,destination):
 	__producer.publish(message,routing_key=str(destination)+'-q',headers={"type":__my_type,"sender":__username,"meta":metadata}, serializer='json')
@@ -52,6 +86,16 @@ def send(message,metadata,destination):
 	#MODULAR - replace this code with whatever network functionality.
 	return
 
+
+def sendAsAdversary(message,metadata,destination):
+	#sends back filtered message from adversary to be accepted.
+	__backch_producer.publish(message,routing_key=str(destination)+'-adv',headers={"meta":metadata}, serializer='json')
+
+def sendToAdversary(message,metadata):
+	#sends message about to be accepted to adversary.
+	__backch_producer.publish(message, routing_key="adversary", exchange=__adv_exchange, headers={"type":__my_type,"sender":__username,"meta":metadata}, serializer='json')
+
+
 def sendAll(message,metadata,type_override=None):
 	if type_override is not None:
 		__producer.publish(message, exchange=__global_exchange, headers={"type":type_override,"sender":__username,"meta":metadata}, serializer='json')
@@ -60,6 +104,23 @@ def sendAll(message,metadata,type_override=None):
 	#IMPORTANT: for reliable broadcast, "send to all" means yourself too.
 	#MODULAR - replace this code with whatever network functionality.
 	return
+	
+	
+def receive_backchannel():	
+	#receive adversarial traffic.
+	message = __adv_queue.get(True)
+	if message is None:
+		return None
+	try:
+		return {'body': message.decode(), 'type': message.headers['type'], 'sender': message.headers['sender'], 'meta': message.headers['meta'], 'raw': message.body}
+	except Exception as e:
+		print "Something went wrong with message receiving. Message:"
+		print repr(message)
+		print "Body: "+repr(message.body)
+		print "Headers: "+repr(message.headers)
+		print "Error: "+repr(e)
+		return None
+	
 
 def receive_next():
 	message = __my_queue.get(True) #the 'True' means messages are auto-acknowledged and are not redelivered later if nothing is done about them. If I want to acknowledge a message manually, I'd use message.ack() and skip the 'True' in the get().
