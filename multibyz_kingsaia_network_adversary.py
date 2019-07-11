@@ -64,9 +64,12 @@ def init_adversary():
 	__adv_exchange = Exchange('adversary', durable=False, delivery_mode=1)
 	__adv_exchange.maybe_bind(__backchannel)
 	__backch_producer = __backchannel.Producer(_backchannel)
-	__adv_queue = Queue('adversary', exchange=__adv_exchange, routing_key='adversary')
-	__adv_queue = __adv_queue(__backchannel)
-	__adv_queue.declare()
+	__adv_queue_1 = Queue('adversary-init', exchange=__adv_exchange, routing_key='adversary-init')
+	__adv_queue_1 = __adv_queue(__backchannel)
+	__adv_queue_1.declare()
+	__adv_queue_2 = Queue('adversary-accept', exchange=__adv_exchange, routing_key='adversary-accept')
+	__adv_queue_2 = __adv_queue(__backchannel)
+	__adv_queue_2.declare()
 		
 		
 	
@@ -108,11 +111,15 @@ def sendAll(message,metadata,type_override=None):
 	
 def receive_backchannel():	
 	#receive adversarial traffic.
-	message = __adv_queue.get(True)
+	code = 'value'
+	message = __adv_queue_1.get(True)
+	if message is None:
+		message = __adv_queue_2.get(True)
+		code = 'timing'
 	if message is None:
 		return None
 	try:
-		return {'body': message.decode(), 'type': message.headers['type'], 'sender': message.headers['sender'], 'meta': message.headers['meta'], 'raw': message.body}
+		return {'body': message.decode(), 'type': message.headers['type'], 'sender': message.headers['sender'], 'meta': message.headers['meta'], 'raw': message.body, 'code': code}
 	except Exception as e:
 		print "Something went wrong with message receiving. Message:"
 		print repr(message)
