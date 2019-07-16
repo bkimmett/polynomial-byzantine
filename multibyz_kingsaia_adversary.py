@@ -42,18 +42,91 @@ def maybe_setup_instance(byzID):
 	
 
 
-def setup_instance(byzID,node_list,target_value=None):
+def setup_instance(byzID, node_list, target_value=None, gameplan=None, gameplan_coin=None):
 	global instances
 	instances[byzID] = {}
 	instances[byzID]['iters_per_epoch'] = num_nodes * 2 #default iteration constant.
 	instances[byzID]['fault_list'] = [] #list of nodes the adversary has overtaken in this instance
-	instances[byzID]['gameplan'] = None #adversarial gameplan
+	instances[byzID]['gameplan'] = gameplan 			#adversarial gameplan (bracha)
+	instances[byzID]['gameplan_coin'] = gameplan_coin 	#adversarial gameplan (global-coin)
 	instances[byzID]['target_value'] = target_value
-	instances[byzID]['held_messages'] = {'wave1_wait':[]} #storage
+	instances[byzID]['held_messages'] = {'wave1_wait':[], 'timing_holds':[None,{},{},{}]} #storage
 	instances[byzID]['epoch'] = {'bracha':{'value':0, 'timing':0}, 'coin':{'value':0, 'timing':0}}
 	instances[byzID]['iteration'] = {'bracha':{'value':0, 'timing':0}, 'coin':{'value':0, 'timing':0}} #the adversary, because it has stalling decisions over the rest of the game, can 
 	instances[byzID]['wave_one_bracha_values'] = [set(),set()] #state: used to keep track of the wave 1 bracha values.
+	instances[byzID]['wave_two_messages_counted'] = 0
+	instances[byzID]['timing_quotas'] = setup_quotas(gameplan, node_list, target_value)
+	
+	
+def setup_quotas(gameplan, node_list, target_value):
+	quota_list = [None,None,None,None]
+	
+	if gameplan is None:
+		return quota_list
+	elif target_value is None:
+		print "Error: Tried to set up quotas for a gameplan without a target value. Not using quotas."
+		return quota_list
+		
+	#reminder:	[1 if target_value else 0] means you're storing the TARGET QUOTA.
+	#			[0 if target_value else 1] means you're storing the NONTARGET QUOTA.		
 
+	#quotas can be None (no quota), or a dict (quota for each node). Inside that dict, you have either a None (no quota for that node) or a list (quota of true, false messages).
+	
+	if gameplan == "force_decide":
+		quota_list[1] = {}
+		for node in node_list: 
+			quota_list[1][node] = [num_nodes,num_nodes] #max out
+			quota_list[1][node][0 if target_value else 1] = fault_bound #nontarget 
+		return quota_list
+		
+	if gameplan == "split_vote":
+		quota_list[1] = {}
+		quota_list[2] = {}
+		odd_one_out = (num_nodes % 2 == 1)
+		flip = target_value
+		for node in node_list: 
+			if odd_one_out:
+				quota_list[2][node] = [0,0]
+				odd_one_out = False
+			
+			if flip:	
+				quota_list[1][node] = [fault_bound,fault_bound+1] #yields 'True' wave 2 message
+				flip  = False
+			else:
+				quota_list[1][node] = [fault_bound+1,fault_bound] #yields 'False' wave 2 message
+				flip  = True
+
+		return quota_list	
+
+	#this function sets up the pass quotas for timing
+	
+	#WAVE 1 GAMEPLAN QUOTAS:
+	
+	#split_vote: for ONE HALF the nodes: [t+1] target, [t] nontarget. For THE OTHER HALF the nodes: [t] target, [t+1] nontarget. Hold the rest until wave 2 emitted. If there is an ODD NODE OUT: hold all until *iteration is over*.
+	#split_hold: for [2T] the nodes: [t+1] target, [t] nontarget. For the other [T+1] nodes: [t] target, [t+1] nontarget. Hold the rest until wave 2 emitted.
+	#force_decide: for EVERY node: ALL target, [t] nontarget, hold the rest until wave 2 emitted.
+	#shaker: We don't need no stinkin' quotas!
+	
+	#WAVE 2 GAMEPLAN QUOTAS:
+	
+	#split_vote: No quota, but if there's still an ODD NODE OUT, hold all (wave 2 msgs) until iteration is over.
+	#split_hold: for [2T] the nodes:  ALL target [at most 2T], [2t+1 - n/2+1] nontarget. We need at least n/2+1 target messages, but the way wave 1 was set up, we should have [2t] vs [t+1] anyway. It's just a matter of making sure they all show up. For the other [T+1] nodes: [t+1] nontarget, [t] target. 
+	#force_decide: No quota.
+	#shaker: See above.
+	
+	
+	#WAVE 3 GAMEPLAN QUOTAS:
+	
+	#split_vote: No quota, even on any ODD NODE OUT.
+	#split_hold: for EVERY node: ALL (target, decide) [there'll be at most [2T]], [1 (one)] *, nondecide. 
+	#force_decide: No quota.
+	#shaker: Still nothin'.
+	
+	#TODO: Nodes need to notify the adversary of when they have finished a bracha iteration, and how.
+	
+	
+	
+	
 	
 	
 #main loop:
@@ -167,6 +240,12 @@ def bracha_or_coin(message):
 		
 	return None #not a bracha/coin message
 
+def iter_rollover(thisInstance, key1, key2):
+	thisInstance['iteration'][key1][key2] += 1
+	if thisInstance['iteration'][key1][key2] == thisInstance['iters_per_epoch']:
+		thisInstance['epoch'][key1][key2] += 1
+		thisInstance['iteration'][key1][key2] = 0 
+	
 
 def maybe_change_message(message, new_body, only_if_node_already_overtaken=False):
 	#only_if_node_already_overtaken is normally FALSE, which means the adversary will try and take over a node that's not already taken over.
@@ -212,7 +291,7 @@ def process_bracha_message_value(message,rbid,thisInstance):
 	return_message(message) #shaker doesn't alter message values, ever. It just messes with timing.
 
 	#figure out what wave it is
-	wave = message['body'][1]
+	wave = int(message['body'][1])
 	value = message['body'][2][0]
 	
 	if wave == 3:
@@ -228,6 +307,11 @@ def process_bracha_message_value(message,rbid,thisInstance):
 			return_message(altered_message)
 			return
 		else:
+			if wave == 2:
+				thisInstance['wave_two_messages_counted'] += 1
+				if thisInstance['wave_two_messages_counted'] == num_nodes:
+					iter_rollover(thisInstance,'bracha','value') #next iteration and/or epoch, so 
+					#TODO: release held wave 1 value messages.
 			#we ignore wave 2/3 messages
 			return_message(message)
 			return
@@ -308,15 +392,15 @@ def process_bracha_message_value(message,rbid,thisInstance):
 				return_message(maybe_change_bracha_message(message, dir_to_change_to)[0])
 		
 		thisInstance['held_messages']['wave1_wait'] = [] #now clear messages
-		thisInstance['iteration']['bracha']['value'] += 1
+		#iter_rollover(thisInstance,'bracha','value') #next iteration and/or epoch
 		thisInstance ['wave_one_bracha_values'] = [set(),set()] #clear out bracha message buckets
-		if thisInstance['iteration']['bracha']['value'] == thisInstance['iters_per_epoch']:
-			thisInstance['epoch']['bracha']['value'] += 1
-			thisInstance['iteration']['bracha']['value'] = 0 
+	
 	
 def process_bracha_message_timing(message,rbid,thisInstance):
 	#this is handled similarly to bracha message value. We wait for all messages to come in, then release them in a set order. 
 	#the most common behavior for the adversary will be to release certain messages, then hold the rest until the end of the iteration.
+	if thisInstance['gameplan'] == 'lie_like_a_rug' or thisInstance['gameplan'] == None:
+		return_message(message) #shaker doesn't alter message values, ever. It just messes with timing.
 	#TODO: add EOI check.
 
 
