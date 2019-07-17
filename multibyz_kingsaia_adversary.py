@@ -75,35 +75,71 @@ def setup_quotas(gameplan, node_list, target_value):
 	if gameplan == "force_decide":
 		quota_list[1] = {}
 		for node in node_list: 
-			quota_list[1][node] = [num_nodes,num_nodes] #max out
-			quota_list[1][node][0 if target_value else 1] = fault_bound #nontarget 
+			quota_list[1][node] = [minority_bound,num_nodes] if target_value else [num_nodes,minority_bound]
 		return quota_list
 		
 	if gameplan == "split_vote":
 		quota_list[1] = {}
 		quota_list[2] = {}
-		odd_one_out = (num_nodes % 2 == 1)
 		flip = target_value
 		for node in node_list: 
-			if odd_one_out:
-				quota_list[2][node] = [0,0]
-				odd_one_out = False
-			
-			if flip:	
-				quota_list[1][node] = [fault_bound,fault_bound+1] #yields 'True' wave 2 message
-				flip  = False
-			else:
-				quota_list[1][node] = [fault_bound+1,fault_bound] #yields 'False' wave 2 message
-				flip  = True
-
+			quota_list[2][node] = [num_nodes // 2, num_nodes // 2] #we won't get more than n/2 wave 2 messages of either type, so the deciding flag is never set
+			quota_list[1][node] = [minority_bound,num_nodes] if flip else [num_nodes,minority_bound] #true flip yields 'True' wave 2 message - false flip yields 'False' wave 2 message - this ensures the wave 2 messages are split half and have and the wave 2 quota works
+			flip  = not flip
 		return quota_list	
+		
+	if gameplan == "split_hold":
+		quota_list[1] = {}
+		quota_list[2] = {}
+		quota_list[3] = {}
+		#the adversary needs two node populations of sizes 2t to pull this off. Let's randomize them - it'll make it easier to check that end-of-wave held message release is working properly. Also, it's something a real adversary might do to make it harder to be detected.
+		wave_one_subsample = random.sample(node_list,max(2*fault_bound, num_nodes // 2 + 1)) #this population might be larger than 2t if t is small
+		wave_two_subsample = random.sample(node_list,2*fault_bound) #this population is always 2t big. We don't want more nodes popping the decide flag.
+		
+		for node in node_list:
+			if node in wave_one_subsample:
+				quota_list[1][node] = [minority_bound,num_nodes] if target_value else [num_nodes,minority_bound] #ensure target value is emitted
+			else:
+				quota_list[1][node] = [num_nodes,minority_bound] if target_value else [minority_bound,num_nodes] #nontarget value is emitted
+			
+			#post wave 1: (assuming target is TRUE):
+			#2t TRUE2, rest FALSE2
+			#for smaller t's:
+			#n/2+1 TRUE2, rest FALSE2
+			
+			if node in wave_two_subsample:
+				quota_list[2][node] = [majority - (num_nodes // 2 + 1),num_nodes] if target_value else [num_nodes,majority - (num_nodes // 2 + 1)] #ensure target value is emitted (wave 2 ver) WITH deciding flag and our target value
+				
+			else:
+				quota_list[2][node] = [num_nodes // 2, num_nodes // 2] 
+				#ensure deciding flag IS NOT emitted. We don't care about the values that much.
+				#this can't hang because the number of messages required to progress to the next stage will ALWAYS be less than the number the quota will allow, for t < n/3
+				
+				#see in mathematica:
+#				 Block[{n = 10000},
+# 				 Plot[{
+# 				   n - t,
+# 					Min[Floor[n/2], Max[2 t, Floor[n/2] + 1]] + 
+# 					 Min[Floor[n/2], n - Max[2 t, Floor[n/2] + 1]]
+# 				   }, {t, 1/3*n, 1}]]
+		
+			#post wave 2:
+			#2t #, DECIDING
+			#rest NOT DECIDING	
+			
+			quota_list[3][node] = [majority - (fault_bound + 1),fault_bound*2] 
+			#wave 3 quotas are strange; instead of determining by value, [False,True]
+			#they determine by the deciding flag being set to [False,True].
+			#so here, we allow up to 2t deciding messages. 
+			#We always want t+1 deciding messages or more. So we only allow (n-t) - (t+1) non-deciding messages, because that guarantees at least t+1 decidings get through.
+		return quota_list
 
 	#this function sets up the pass quotas for timing
 	
 	#WAVE 1 GAMEPLAN QUOTAS:
 	
-	#split_vote: for ONE HALF the nodes: [t+1] target, [t] nontarget. For THE OTHER HALF the nodes: [t] target, [t+1] nontarget. Hold the rest until wave 2 emitted. If there is an ODD NODE OUT: hold all until *iteration is over*.
-	#split_hold: for [2T] the nodes: [t+1] target, [t] nontarget. For the other [T+1] nodes: [t] target, [t+1] nontarget. Hold the rest until wave 2 emitted.
+	#split_vote: for ONE HALF the nodes: ALL target, [t] nontarget. For THE OTHER HALF the nodes: [t] target, ALL nontarget. Hold the rest until wave 2 emitted. If there is an ODD NODE OUT: hold all until *iteration is over*.
+	#split_hold: for [2T] the nodes: ALL target, [t] nontarget. For the other [T+1] nodes: [t] target, ALL nontarget. Hold the rest until wave 2 emitted.
 	#force_decide: for EVERY node: ALL target, [t] nontarget, hold the rest until wave 2 emitted.
 	#shaker: We don't need no stinkin' quotas!
 	
@@ -403,6 +439,35 @@ def process_bracha_message_timing(message,rbid,thisInstance):
 		return_message(message) #shaker doesn't alter message values, ever. It just messes with timing.
 	#TODO: add EOI check.
 
+	#TODO: add 'shaker'
+	
+	wave = int(message['body'][1])
+	value = message['body'][2][0]
+	sender = message['sender']
+	
+	if wave == 3:
+		deciding = message['body'][2][1]
+		
+	if thisInstance['timing_quotas'][wave] is None:
+		#no quota - return
+		return_message(message)
+	else:
+		quota = thisInstance['timing_quotas'][wave][sender]
+		if wave == 1 or wave == 2:
+			quota = thisInstance['timing_quotas'][wave][sender][1 if value else 0]
+			if quota > 0:
+				thisInstance['timing_quotas'][wave][sender][1 if value else 0] -= 1
+				return_message(message) #OK, clear to go. Send it out.
+			else:
+				hold_message(message, '') ##TODO: what key?
+		elif wave == 3:
+			quota = thisInstance['timing_quotas'][wave][sender][1 if deciding else 0]
+			if quota > 0:
+				thisInstance['timing_quotas'][wave][sender][1 if deciding else 0] -= 1
+				return_message(message) #OK, clear to go. Send it out.
+			else:
+				hold_message(message, '') ##TODO: what key?
+
 
 	return_message(message) #TODO: for now, do nothing
 	return	
@@ -484,7 +549,7 @@ def process_message(message, reprocess=False):
 def main(args):
 	#args = [[my user ID, the number of nodes]]. For the time being, we're not passing around node IDs but eventually we WILL need everyone to know all the node ids.
 	print "Starting up..."
-	global username, num_nodes, fault_bound, all_nodes, instances
+	global username, num_nodes, fault_bound, majority, minority_bound, all_nodes, instances
 		
 	
 	username = args[0]
@@ -495,6 +560,8 @@ def main(args):
 	
 	num_nodes = len(all_nodes)
 	fault_bound = (num_nodes - 1) // 3  #t < n/3. Not <=.
+	majority = num_nodes - fault_bound #what's n - t?
+	minority_bound = majority - (majority // 2 + 1) #what's the largest part you can have of n - t without getting a majority of it?
 	
 	print "Maximum adversarial nodes: {}/{}.".format(fault_bound, num_nodes)
 	
