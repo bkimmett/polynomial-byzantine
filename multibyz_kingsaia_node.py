@@ -181,16 +181,19 @@ class ReliableBroadcast: # pylint: disable=no-init
 		
 		try:
 			if len(data) > 0:
-				if data[0] == ByzantineAgreement.MessageMode.coin_flip or data[0] == ByzantineAgreement.MessageMode.coin_list or data[0] == ByzantineAgreement.MessageMode.coin_ack or data[0] == ByzantineAgreement.MessageMode.bracha:
+				if data[0] == MessageMode.coin_flip or data[0] == MessageMode.coin_list or data[0] == MessageMode.coin_ack or data[0] == MessageMode.bracha:
 					is_byzantine_related = True #probably true, anyway. Sadly, I'm doing the old C way of comparing to an obscured constant as opposed to a class instance, because the serialization method (JSON) I'm using can't send objects/custom data types. And switching to an upgraded serializer (pickle) would be flagrantly insecure, to where it would be REALLY EASY for an adversary to take over every node at once by sending a malicious broadcast message. Ripperoni.
 		except TypeError:
 			pass #it's not byzantine
 			
-		try:
-			if is_byzantine_related and checkCoinboardMessages and (data[0] == ByzantineAgreement.MessageMode.coin_flip or data[0] == ByzantineAgreement.MessageMode.coin_list):
-				instance = ByzantineAgreement.getInstance(rbid[2][0]) #rbid[2][0] = extraMeta[0] = byzID
-				if not instance.checkCoinboardMessageHolding(message):
-					return None#if held, stop processing for now
+		###try:
+		if is_byzantine_related and checkCoinboardMessages and (data[0] == MessageMode.coin_flip or data[0] == MessageMode.coin_list):
+			instance = ByzantineAgreement.getInstance(rbid[2][0]) #rbid[2][0] = extraMeta[0] = byzID
+			if not instance.checkCoinboardMessageHolding(message):
+				return None#if held, stop processing for now
+					
+					
+					
 				#coinboard message - possibly hold for later!
 				#coinboard messages can be held for the following reasons:
 				#GENERATE phase: IF j' (orig. sender) is not me AND message i' (flip#) > 1 AND I haven't received (n-t) acknowledgements for the message of (i'-1,j').
@@ -201,10 +204,10 @@ class ReliableBroadcast: # pylint: disable=no-init
 				#TODO: As a check uses i' and j' (part of the message body), this means coinboard messages need to be verified before they are accepted. WELL before.
 				#but it means coinboard messages can be accepted without verification (because they already have been). Double-edged sword.
 				#TODO: Of course, we validate anyway. And we'll do a secondary message hold when coinboard messages are accepted, because we can still get ones from early/late epochs/iterations. 
-		except Exception as err:
+		###except Exception as err:
 			#TODO: What kind of exceptions can be fired here?
-			print err
-			raise err
+		###	print err
+		###	raise err
 		
 		
 		
@@ -310,14 +313,15 @@ class ReliableBroadcast: # pylint: disable=no-init
 		#what in Byzantine doesn't:
 		
 
-class ByzantineAgreement:
 
-	#MessageMode = Enum('MessageMode',['bracha','coin_flip','coin_ack','coin_list'])
-	class MessageMode: # pylint: disable=no-init,too-few-public-methods
-		bracha = 'MessageMode_bracha-0'
-		coin_flip = 'MessageMode_coin_flip-1'
-		coin_ack = 'MessageMode_coin_ack-2'
-		coin_list = 'MessageMode_coin_list-3'
+#MessageMode = Enum('MessageMode',['bracha','coin_flip','coin_ack','coin_list'])
+class MessageMode: # pylint: disable=no-init,too-few-public-methods
+	bracha = 'MessageMode_bracha-0'
+	coin_flip = 'MessageMode_coin_flip-1'
+	coin_ack = 'MessageMode_coin_ack-2'
+	coin_list = 'MessageMode_coin_list-3'
+
+class ByzantineAgreement:
 	
 	__byzantine_list__ = {}
 	
@@ -491,12 +495,12 @@ class ByzantineAgreement:
 		
 		
 		#aka Bracha Wave 1
-		ReliableBroadcast.broadcast((ByzantineAgreement.MessageMode.bracha, 1, self.value),extraMeta=(self.ID,self.epoch,self.iteration))
+		ReliableBroadcast.broadcast((MessageMode.bracha, 1, self.value),extraMeta=(self.ID,self.epoch,self.iteration))
 		#also, count myself (free).
 		self.brachabits[username][1] = self.value[0]
-		if self.brachabits[username][0]: #if we're a good node:
-			self.brachaMsgCtrGood[0][1 if self.value else 0] += 1
-		self.brachaMsgCtrTotal[0][1 if self.value else 0] += 1
+		#if self.brachabits[username][0]: #if we're a good node:
+		self.brachaMsgCtrGood[0][1 if self.value[0] else 0] += 1 ###we're always a good node
+		self.brachaMsgCtrTotal[0][1 if self.value[0] else 0] += 1
 		
 		#after we send our own message, we might as well check to see if there's any messages waiting.
 		if self.iteration == 1:
@@ -732,7 +736,7 @@ class ByzantineAgreement:
 			data = message['body']
 			mode = data[0]
 			
-			if mode != ByzantineAgreement.MessageMode.coin_flip and mode != ByzantineAgreement.MessageMode.coin_ack and mode != ByzantineAgreement.MessageMode.coin_list:
+			if mode != MessageMode.coin_flip and mode != MessageMode.coin_ack and mode != MessageMode.coin_list:
 				self.log("Throwing out not-a-coin message from {} via {} (real type {}).".format(rbid[0],message['sender'],type(mode)))
 				self.log("This is NOT supposed to happen - noncoin messages aren't even supposed to hit this function. Debug time!")
 				return #this can't be processed, no way no how.
@@ -756,11 +760,11 @@ class ByzantineAgreement:
 		#ack: i, j
 		#list: [list]	
 			
-		if mode == ByzantineAgreement.MessageMode.coin_flip or mode == ByzantineAgreement.MessageMode.coin_ack:
+		if mode == MessageMode.coin_flip or mode == MessageMode.coin_ack:
 			try:
 				message_i = data[1]
 				message_j = data[2]
-				if mode == ByzantineAgreement.MessageMode.coin_flip:
+				if mode == MessageMode.coin_flip:
 					message_value = data[3]
 			except (IndexError,TypeError,KeyError):
 				self.log("Discarding completely invalid coinflip message from {} via {}, missing some data.".format(rbid[0],message['sender']))
@@ -780,7 +784,7 @@ class ByzantineAgreement:
 				self.log("Received a coin message about a node {} we don't know.".format(message_j))
 				return
 		
-			if mode == ByzantineAgreement.MessageMode.coin_flip and type(message_value) is not bool:
+			if mode == MessageMode.coin_flip and type(message_value) is not bool:
 				self.log("Invalid coinflip message from {} via {}, message type {} instead of boolean.".format(rbid[0], message['sender'], type(message_value)))
 				return
 
@@ -802,7 +806,7 @@ class ByzantineAgreement:
 			
 			##OK, we've done some light validation, now store it.
 			
-			if mode == ByzantineAgreement.MessageMode.coin_flip:
+			if mode == MessageMode.coin_flip:
 				if message_j != rbid[0]: #sender doesn't match who the message is about, i.e. this is a forgery or a screw-up of grand proportions
 					self.log("{} tried to forge {}'s coin flip message. Discarding/blacklisting.".format(rbid[0],message_j))
 					self.blacklistNode(rbid[0])
@@ -836,7 +840,7 @@ class ByzantineAgreement:
 					return
 						
 			
-			if mode == ByzantineAgreement.MessageMode.coin_ack:
+			if mode == MessageMode.coin_ack:
 				this_coinboard[message_i][message_j][1].add(rbid[0]) #sender of broadcast
 				self.log("Received acknowledgement from {} for coin flip #{} of node {}.".format(rbid[0], message_i, message_j))
 				#Check number of acknowledgements.
@@ -892,7 +896,7 @@ class ByzantineAgreement:
 				#probably check for while loop. broadcast next flip could also be checking held flip messages, so a lot of released messages that way. Do releases after state updates.
 
 		
-		elif mode == ByzantineAgreement.MessageMode.coin_list:
+		elif mode == MessageMode.coin_list:
 			if message_from_the_past:
 				self.log("Throwing out old coin list message (e/i {}/{}) from {}.".format(epoch,iteration,rbid[0]))
 				#old coin list messages have no use.
@@ -1002,12 +1006,12 @@ class ByzantineAgreement:
 	def _broadcastCoin(self,message_i):
 		global username, random_generator
 		flip = (random_generator.random() >= .5) #True if >= .5, otherwise False. A coin toss.
-		ReliableBroadcast.broadcast((ByzantineAgreement.MessageMode.coin_flip, message_i, username,flip),extraMeta=(self.ID,self.epoch,self.iteration))
+		ReliableBroadcast.broadcast((MessageMode.coin_flip, message_i, username,flip),extraMeta=(self.ID,self.epoch,self.iteration))
 		
 		return flip #so we can use it too
 		
 	def _acknowledgeCoin(self,message_i,message_j):
-		ReliableBroadcast.broadcast((ByzantineAgreement.MessageMode.coin_ack, message_i, message_j),extraMeta=(self.ID,self.epoch,self.iteration))	
+		ReliableBroadcast.broadcast((MessageMode.coin_ack, message_i, message_j),extraMeta=(self.ID,self.epoch,self.iteration))	
 		
 	
 	def _finalizeCoinboard(self):
@@ -1073,7 +1077,7 @@ class ByzantineAgreement:
 				
 		coinList = [[key,value] for key, value in buildingDict.iteritems()] #key = node name = J. value = highest round = I.
 		#now send off the list
-		ReliableBroadcast.broadcast((ByzantineAgreement.MessageMode.coin_list, coinList),extraMeta=(self.ID,self.epoch,self.iteration))	
+		ReliableBroadcast.broadcast((MessageMode.coin_list, coinList),extraMeta=(self.ID,self.epoch,self.iteration))	
 		
 	def blacklistNode(self,sender):
 		#blacklisted nodes have their coin flips submitted to globalCoin IGNORED.
@@ -1197,7 +1201,7 @@ class ByzantineAgreement:
 		for message in self.heldMessages['coin_epoch'][target_epoch]:
 		
 			#we can get the message type without trouble 'cause we already got it in a 'try' earlier.
-			if message['body'][0] == ByzantineAgreement.MessageMode.coin_ack:
+			if message['body'][0] == MessageMode.coin_ack:
 				#Throw here - ack messages aren't supposed to be held here.
 				#TODO: actually throw.
 				continue
@@ -1232,7 +1236,7 @@ class ByzantineAgreement:
 			return
 			
 		for message in self.heldMessages['coin_iteration'][target_iter]:
-			if message['body'][0] == ByzantineAgreement.MessageMode.coin_ack:
+			if message['body'][0] == MessageMode.coin_ack:
 				#Throw here - ack messages aren't supposed to be held here.
 				raise RuntimeError('coin ack message was incorrectly held for iteration')
 				
@@ -1367,13 +1371,14 @@ class ByzantineAgreement:
 		#if they are equal, we stay where we are.
 		
 		#Bracha Wave 2
-		ReliableBroadcast.broadcast((ByzantineAgreement.MessageMode.bracha, 2, self.value),extraMeta=(self.ID,self.epoch,self.iteration))
+		ReliableBroadcast.broadcast((MessageMode.bracha, 2, self.value),extraMeta=(self.ID,self.epoch,self.iteration))
 		#also, count myself (free).
 		self.brachabits[username][2] = self.value[0]
 		
-		if self.brachabits[username][0]: #if we're a good node:
-			self.brachaMsgCtrGood[1][1 if self.value[0] else 0] += 1
+		#if self.brachabits[username][0]: #if we're a good node:
+		self.brachaMsgCtrGood[1][1 if self.value[0] else 0] += 1 ### we're always a good node
 		self.brachaMsgCtrTotal[1][1 if self.value[0] else 0] += 1
+		
 		#TODO: IMPORTANT - Broadcast SHOULD loop back, but if it does not, we need to call ValidateMessage manually. This could the last received message needed to advance to another wave...!
 		
 	
@@ -1388,14 +1393,16 @@ class ByzantineAgreement:
 		self.log("Moving to Bracha Wave 3: value is now {}, {}deciding".format(self.value[0],'' if self.value[1] else 'not '))
 		
 		#Bracha Wave 3
-		ReliableBroadcast.broadcast((ByzantineAgreement.MessageMode.bracha, 3, self.value),extraMeta=(self.ID,self.epoch,self.iteration))
+		ReliableBroadcast.broadcast((MessageMode.bracha, 3, self.value),extraMeta=(self.ID,self.epoch,self.iteration))
 		#also, count myself (free).
 		self.brachabits[username][3] = self.value[0]
 
-		if self.brachabits[username][0]: #if we're a good node:
-			self.brachaMsgCtrGood[2][1 if self.value[0] else 0] += 1
-			if self.value[1]:
-				self.brachaMsgCtrGoodDeciding[1 if self.value[0] else 0] += 1
+		#if self.brachabits[username][0]: #if we're a good node:
+		### we're always a good node
+		self.brachaMsgCtrGood[2][1 if self.value[0] else 0] += 1
+		if self.value[1]:
+			self.brachaMsgCtrGoodDeciding[1 if self.value[0] else 0] += 1
+		### end good block
 		self.brachaMsgCtrTotal[2][1 if self.value[0] else 0] += 1
 		
 	
@@ -1603,10 +1610,10 @@ class ByzantineAgreement:
 			messageIteration = messageExtraMeta[2]
 			messageCoinMode = message['body'][0]
 			#messageOrigSender = message['meta']['rbid'][0]
-			if messageCoinMode == ByzantineAgreement.MessageMode.coin_flip:
+			if messageCoinMode == MessageMode.coin_flip:
 				message_i = message['body'][1]
 				message_j = message['body'][2]
-			if messageCoinMode == ByzantineAgreement.MessageMode.coin_list:
+			if messageCoinMode == MessageMode.coin_list:
 				message_list = message['body'][1]
 		except (TypeError, ValueError, IndexError):
 			self.log("Value error. Reliable? message from {} via {} had to be discarded.".format(messageOrigSender, message['sender']))
@@ -1615,7 +1622,7 @@ class ByzantineAgreement:
 		search_past = False
 		
 		
-		if messageCoinMode == ByzantineAgreement.MessageMode.coin_flip:
+		if messageCoinMode == MessageMode.coin_flip:
 			search_past = False
 			if message_i == 1: #i.e. round #1
 				#TODO: Message I's start at 0. Does everyone know this?
@@ -1650,7 +1657,7 @@ class ByzantineAgreement:
 				else: 
 					self.holdCoinForSufficientAcks(message,message_i,message_j)
 					return False
-		elif messageCoinMode == ByzantineAgreement.MessageMode.coin_list:	
+		elif messageCoinMode == MessageMode.coin_list:	
 			search_past = False
 			if self.epoch > messageEpoch:
 				search_past = True
@@ -1762,10 +1769,10 @@ def main(args):
 					if result is not None:
 						#result from Accept. Do stuff.
 						is_byzantine_related = False
-						if isinstance(result['body'][0],collections.Sequence) and len(result['body']) > 0 and (result['body'][0] == ByzantineAgreement.MessageMode.coin_flip or result['body'][0] == ByzantineAgreement.MessageMode.coin_list or result['body'][0] == ByzantineAgreement.MessageMode.coin_ack or result['body'][0] == ByzantineAgreement.MessageMode.bracha):
+						if isinstance(result['body'][0],collections.Sequence) and len(result['body']) > 0 and (result['body'][0] == MessageMode.coin_flip or result['body'][0] == MessageMode.coin_list or result['body'][0] == MessageMode.coin_ack or result['body'][0] == MessageMode.bracha):
 							is_byzantine_related = True
 						
-						if is_byzantine_related: #type(result['body'][0]) is ByzantineAgreement.MessageMode:
+						if is_byzantine_related: #type(result['body'][0]) is MessageMode:
 							if debug_rb_accept:
 								print "Accepted message: "+repr(result)
 								stdout.flush() #force write
@@ -1779,11 +1786,11 @@ def main(args):
 								continue #get outta here
 							
 							#take that instance and kick this to it
-							if msgModeTemp == ByzantineAgreement.MessageMode.bracha:
+							if msgModeTemp == MessageMode.bracha:
 								thisInstance.validateBrachaMsg(result)
 								
 								#TODO call bracha message verify function
-							elif msgModeTemp == ByzantineAgreement.MessageMode.coin_flip or msgModeTemp == ByzantineAgreement.MessageMode.coin_flip or msgModeTemp == ByzantineAgreement.MessageMode.coin_ack:
+							elif msgModeTemp == MessageMode.coin_flip or msgModeTemp == MessageMode.coin_flip or msgModeTemp == MessageMode.coin_ack:
 								thisInstance.validateCoinMsg(result)
 								#TODO call coin input message verify function
 						else:

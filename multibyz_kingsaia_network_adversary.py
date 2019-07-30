@@ -51,37 +51,47 @@ def init(username, msgtype):
 	__backchannel.connect()
 	__adv_exchange = Exchange('adversary', durable=False, delivery_mode=1)
 	__adv_exchange.maybe_bind(__backchannel)
-	__backch_producer = __backchannel.Producer(_backchannel)
+	__backch_producer = __backchannel.Producer(__backchannel)
 	__adv_queue = Queue(username+'-adv', exchange=__adv_exchange, routing_key=username+'-adv')
 	__adv_queue = __adv_queue(__backchannel)
 	__adv_queue.declare()
 
 
 def init_adversary():
-	global  __backchannel, __backch_producer, __adv_exchange, __adv_queue
+	global  __username, __my_type, __connection, __global_exchange, __producer,  __backchannel, __backch_producer, __adv_exchange, __adv_queue #, __my_queue
+	
+	__username = 'adversary'
+	__my_type = 'adversary'
+	
+	#adversary has broadcast-only access to the regular exchange
+	__connection = Connection('amqp://') 
+	__connection.connect()
+	__global_exchange = Exchange('broadcast', type='fanout', durable=False, delivery_mode=1)
+	__global_exchange.maybe_bind(__connection) 
+	__producer = __connection.Producer(__connection)
+	
 	__backchannel = Connection('amqp://')
 	__backchannel.connect()
 	__adv_exchange = Exchange('adversary', durable=False, delivery_mode=1)
 	__adv_exchange.maybe_bind(__backchannel)
-	__backch_producer = __backchannel.Producer(_backchannel)
-	__adv_queue_1 = Queue('adversary-init', exchange=__adv_exchange, routing_key='adversary-init')
-	__adv_queue_1 = __adv_queue(__backchannel)
-	__adv_queue_1.declare()
-	__adv_queue_2 = Queue('adversary-accept', exchange=__adv_exchange, routing_key='adversary-accept')
-	__adv_queue_2 = __adv_queue(__backchannel)
-	__adv_queue_2.declare()
+	__backch_producer = __backchannel.Producer(__backchannel)
+	__adv_queue = Queue('adversary', exchange=__adv_exchange, routing_key='adversary')
+	__adv_queue = __adv_queue(__backchannel)
+	__adv_queue.declare()
+
 		
 		
 	
 def shutdown():
-	if __connection is not None:
-		__connection.release()
+	__connection.release()
 	__backchannel.release()	
 	
 	
 
-def send(message,metadata,destination):
-	__producer.publish(message,routing_key=str(destination)+'-q',headers={"type":__my_type,"sender":__username,"meta":metadata}, serializer='json')
+def send(message,metadata,destination,type_override=None):
+	__producer.publish(message,routing_key=str(destination)+'-q',headers={"type": type_override if type_override is not None else __my_type,"sender":__username,"meta":metadata}, serializer='json')
+
+
 	#in the real world, there would probably be a try(), and in the event of an error, a revive() and a reattempt.
 	#also in the real world, the sender would be a property of the messages' transit. Here, using this networking framework, we have to add it manually.
 	#for those testing adversarial nodes: assume they are unable to forge this 'sender' attribute.
@@ -93,35 +103,49 @@ def send(message,metadata,destination):
 def sendAsAdversary(message,metadata,destination):
 	#sends back filtered message from adversary to be accepted.
 	__backch_producer.publish(message,routing_key=str(destination)+'-adv',headers={"meta":metadata}, serializer='json')
+	
+def adversaryBroadcast(message,metadata,sender='adversary',type_override=None):
+	__producer.publish(message, exchange=__global_exchange, headers={"type":type_override if type_override is not None else 'node',"sender":sender,"meta":metadata}, serializer='json')
 
-def sendToAdversary(message,metadata):
+def sendToAdversary(message,metadata,type_override=None):
+	#sends message to adversary for value messing-with..
+	__backch_producer.publish(message, routing_key="adversary", exchange=__adv_exchange, headers={"type":type_override if type_override is not None else __my_type,"sender":__username,"meta":metadata}, serializer='json')
+
+#def sendToAdversary2(message,metadata,type_override=None):
 	#sends message about to be accepted to adversary.
-	__backch_producer.publish(message, routing_key="adversary", exchange=__adv_exchange, headers={"type":__my_type,"sender":__username,"meta":metadata}, serializer='json')
+#	__backch_producer.publish(message, routing_key="adversary-accept", exchange=__adv_exchange, headers={"type":type_override if type_override is not None else __my_type,"sender":__username,"meta":metadata}, serializer='json')
 
 
 def sendAll(message,metadata,type_override=None):
-	if type_override is not None:
-		__producer.publish(message, exchange=__global_exchange, headers={"type":type_override,"sender":__username,"meta":metadata}, serializer='json')
-	else:
-		__producer.publish(message ,exchange=__global_exchange, headers={"type":__my_type,"sender":__username,"meta":metadata}, serializer='json')
+	__producer.publish(message, exchange=__global_exchange, headers={"type":type_override if type_override is not None else __my_type,"sender":__username,"meta":metadata}, serializer='json')
 	#IMPORTANT: for reliable broadcast, "send to all" means yourself too.
 	#MODULAR - replace this code with whatever network functionality.
 	return
 	
 	
-def receive_backchannel():	
+def receive_backchannel(im_adversary=False):	
 	#receive adversarial traffic.
-	code = 'value'
-	message = __adv_queue_1.get(True)
-	if message is None:
-		message = __adv_queue_2.get(True)
-		code = 'timing'
+	#code = None
+	message = __adv_queue.get(True)
+	if message is not None:
+		try:
+			if message.headers['type'] == 'node':
+				code = 'value'
+			else:
+				code = message.headers['type'] #used for 'timing' and others
+		except Exception as e:
+			print "Something went wrong with backchannel message decoding. Message:"
+			print repr(message)
+			print "Body: "+repr(message.body)
+			print "Headers: "+repr(message.headers)
+			print "Error: "+repr(e)
+			return None
 	if message is None:
 		return None
 	try:
 		return {'body': message.decode(), 'type': message.headers['type'], 'sender': message.headers['sender'], 'meta': message.headers['meta'], 'raw': message.body, 'code': code}
 	except Exception as e:
-		print "Something went wrong with message receiving. Message:"
+		print "Something went wrong with backchannel message receiving. Message:"
 		print repr(message)
 		print "Body: "+repr(message.body)
 		print "Headers: "+repr(message.headers)

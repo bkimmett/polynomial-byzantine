@@ -6,7 +6,7 @@ from time import sleep
 from string import split
 import random
 #from random import choice, sample, random
-import multibyz_kingsaia_network as MessageHandler
+import multibyz_kingsaia_network_adversary as MessageHandler
 #getting an error with the above line? 'pip install kombu'
 
 
@@ -120,7 +120,14 @@ def main(args):
 						#send format: message, meta, dest
 						print "Message sent to {} to be broadcast.".format(dest)
 					elif command == "adv":
-						print "This isn't the adversarial-setup version of the client. Try another command."
+						gameplan1, gameplan2, leftovers = split(message2+" ", " ", 2)
+						try:
+							MessageHandler.sendToAdversary((gameplan1, gameplan2),{})
+							print "Requested adversary set gameplans to '{}/{}'. You should wait for a confirmation message before starting a byzantine instance.".format(gameplan1, gameplan2)
+						except NameError:
+							print "Couldn't send to adversary - it looks like you're not using an adversarial setup."
+						#send format: message, meta, dest
+						
 					elif command == "byz": 
 						byz_ids_so_far += 1
 						byz_id = "{}-{}".format("".join([random_generator.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ') for _ in range(10)]),byz_ids_so_far)
