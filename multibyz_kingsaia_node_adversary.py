@@ -801,10 +801,15 @@ class ByzantineAgreement:
 				this_coinboard = self.pastCoinboards[(epoch,iteration)]
 			else:
 				this_coinboard = self.coinboard
-				
-			while len(this_coinboard) <= message_i:
-				this_coinboard.append({}) #add blank extra spaces to fill out board
-			if message_j not in this_coinboard[message_i]:
+			
+			if not self.ensureCoinboardPosExists(this_coinboard, message_i, message_j):
+				self.log("Couldn't accept {}'s coin flip message - impossible round (i) number: {}.".format(rbid[0],message_i))
+				return
+			
+			#replaced with ensureCoinboardPosExists	
+			#while len(this_coinboard) <= message_i:
+			#	this_coinboard.append({}) #add blank extra spaces to fill out board
+			#if message_j not in this_coinboard[message_i]:
 				this_coinboard[message_i][message_j] = [None,set()] #setup record
 			
 			##OK, we've done some light validation, now store it.
@@ -884,9 +889,12 @@ class ByzantineAgreement:
 								if self.lastCoinBroadcast < self.num_nodes:
 									coin = self._broadcastCoin(self.lastCoinBroadcast)
 									##TODO: This can never happen while the coinboard is undefined, right?
-									while len(self.coinboard) <= self.lastCoinBroadcast:
-										self.coinboard.append({}) #extend coinboard as needed
-									self.coinboard[self.lastCoinBroadcast][username] = [coin,set()] #TODO: Should this be a sortedset()?
+									self.ensureCoinboardPosExists(self.coinboard, self.lastCoinBroadcast, username)
+									
+									#while len(self.coinboard) <= self.lastCoinBroadcast:
+										#self.coinboard.append({}) #extend coinboard as needed
+									#self.coinboard[self.lastCoinBroadcast][username] = [coin,set()] #TODO: Should this be a sortedset()?
+									self.coinboard[self.lastCoinBroadcast][username][0] = coin
 									#this will overwrite any acks that were already there, but... yeah, how could acks arrive if the coin hadn't been broadcast yet?! Not a concern.		
 									self.coinboard[self.lastCoinBroadcast][username][1].add(username) #acknowledge receipt of our own message.
 					else:
@@ -978,10 +986,11 @@ class ByzantineAgreement:
 	
 	def _globalCoin(self):
 		global username
-		if len(self.coinboard) < 1:
-			self.coinboard.append({})
-		if username not in self.coinboard[0]:
-			self.coinboard[0][username] = [None,set()] #put our first coin here
+		self.ensureCoinboardPosExists(self.coinboard, 1, username)
+		#if len(self.coinboard) < 1:
+		#	self.coinboard.append({})
+		#if username not in self.coinboard[0]:
+		#	self.coinboard[0][username] = [None,set()] #put our first coin here
 		
 		coin_value = self._broadcastCoin(0)
 		
@@ -1587,6 +1596,16 @@ class ByzantineAgreement:
 		
 		#TODO: Notify decision here.
 		
+	def ensureCoinboardPosExists(self, coinboard, round, source):
+		while len(coinboard) <= round and len(coinboard) < self.num_nodes:
+			coinboard.append({}) #add rounds as necessary
+		if len(coinboard) <= round:
+			return False #overlength round #
+		if source not in coinboard[round]:
+			coinboard[round][source] = [None,set()]
+		return True
+		
+		
 	def checkCoinboardMessageHolding(self,message):
 		#this only checks and holds messages for coinboard reasons (i.e. not for epoch/iteration reasons. Mind you, any message held for epoch/iteration reasons could probably ALSO be held for coinboard reasons, so...)
 		
@@ -1627,7 +1646,7 @@ class ByzantineAgreement:
 		
 		if messageCoinMode == MessageMode.coin_flip:
 			search_past = False
-			if message_i == 1: #i.e. round #1
+			if message_i == 0: #i.e. round #1
 				#TODO: Message I's start at 0. Does everyone know this?
 				return True #we always accept i' == 1 messages
 			else: 
@@ -1646,9 +1665,17 @@ class ByzantineAgreement:
 				try:
 					#get how many acks there are for the PREVIOUS message.
 					if search_past:
-						acks_count = len(self.pastCoinboards[(messageEpoch,messageIteration)][message_i-1][messageOrigSender][1])
+						if self.ensureCoinboardPosExists(self.pastCoinboards[(messageEpoch,messageIteration)], message_i-1, messageOrigSender):
+							acks_count = len(self.pastCoinboards[(messageEpoch,messageIteration)][message_i-1][messageOrigSender][1])
+						else:
+							self.log("Couldn't accept {}'s coin flip message - impossible round (i) number for previous round: {}.".format(rbid[0],message_i))
+							return False
 					else:
-						acks_count = len(self.coinboard[message_i-1][messageOrigSender][1])
+						if self.ensureCoinboardPosExists(self.coinboard, message_i-1, messageOrigSender):
+							acks_count = len(self.coinboard[message_i-1][messageOrigSender][1])
+						else:
+							self.log("Couldn't accept {}'s coin flip message - impossible round (i) number for previous round: {}.".format(rbid[0],message_i))
+							return False
 				except Exception as err:
 					print err 
 					raise err

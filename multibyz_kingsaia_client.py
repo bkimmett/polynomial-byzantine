@@ -2,7 +2,7 @@
 
 from __future__ import division
 from sys import argv, exit
-from time import sleep
+from time import sleep, time
 from string import split
 import random
 #from random import choice, sample, random
@@ -13,6 +13,7 @@ import multibyz_kingsaia_network as MessageHandler
 def main(args):
 	#args = my user ID, the number of nodes. For the time being, we're not passing around node IDs but eventually we WILL need everyone to know all the node ids.
 	print "Starting up..."
+
 		
 	try:
 		random_generator = random.SystemRandom()
@@ -38,9 +39,13 @@ def main(args):
 	else:
 		MessageHandler.init("client","client") #anonymous client
 		
+		last_message_time = time()	
+		
 	while True:	
 		print "Checking for messages."
 		while True:
+			if time() - last_message_time >= 5:
+				break #if we've been processing messages for 5 seconds straight, pause to give control to the user
 			message = MessageHandler.receive_next()
 			if message is None:
 				weSaidNoMessages = True
@@ -99,6 +104,7 @@ def main(args):
 				
 		try:
 			message = raw_input("Ready > ")
+			last_message_time = time()
 			if message != "":
 				try:
 					input_split = split(message," ",1)

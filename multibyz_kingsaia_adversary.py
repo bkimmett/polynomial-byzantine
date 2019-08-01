@@ -346,7 +346,7 @@ def maybe_change_bracha_message(message, new_value):
 	updated_value = list(message['body'][2])
 	updated_value[0] = new_value
 	updated_body = message['body'][:] #copy
-	updated_body[2][0] = tuple(updated_value)
+	updated_body[2] = tuple(updated_value)
 				
 	#altered_message, success = maybe_change_message(message, updated_body) #overwrite message, if possible				
 	return maybe_change_message(message, updated_body) #overwrite message, if possible
@@ -369,14 +369,109 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 		return_value_message(message) #shaker doesn't alter message values, ever. It just messes with timing.
 		return #we're done here
 		
+	if thisInstance['gameplan'] == 'lie_like_a_rug': #lie like a rug just changes EVERYTHING with no regard for the rest
+		#adversary prepares fake message
+		altered_message, changed = maybe_change_bracha_message(message, (False if value else True) if thisInstance['target_value'] is None else thisInstance['target_value'] ) #overwrite message, if possible. if we don't have a target, swap the bit of the message. If we do have a target, set the value to that.
+		if changed:
+			log("Changed message value to {}".format(altered_message['body'][2][0]))
+		log("Returning message.")
+		return_value_message(altered_message)
+		return
+		
 	#figure out what wave it is
 	wave = int(message['body'][1])
 	value = message['body'][2][0]
 	
-	if wave == 3:
-		deciding = message['body'][2][1]
-	#if it's wave one, let's check to see if we know what X node is sending out in wave one
+
+	
+	if wave == 1:
+		thisInstance['wave_one_bracha_values'][1 if value else 0].add(message['sender']) #rbid[0]) #store the node in the right bucket
+		log("Holding wave 1 value message.")
+		hold_message(message, 'wave1_wait')	#store the message so the adversary can process them as a batch
+
+		if len(thisInstance['wave_one_bracha_values'][0])+len(thisInstance['wave_one_bracha_values'][1]) == num_nodes:
+			#once everyone has reported in, start changing values.
+			#yeah, yeah, I know. The adversary for a fault-tolerant system isn't fault-tolerant itself! It's ironic, isn't it?
+	
+			#so: we're altering the values of wave 1 messages.
+			#how many nodes are already on our side?
+			log("About to process held wave 1 value messages.")
+			values_target = len(thisInstance['wave_one_bracha_values'][1 if thisInstance['target_value'] else 0])
+			#how many nodes are against us?
+			values_nontarget = len(thisInstance['wave_one_bracha_values'][0 if thisInstance['target_value'] else 1])
 		
+			messages_to_change = 0
+			dir_to_change_to = None
+		
+			if thisInstance['gameplan'] == 'split_vote' or thisInstance['gameplan'] == 'split_hold':
+				messages_to_change_to_target = max( (fault_bound+1) - values_target, 0 )
+				messages_to_change_to_nontarget = max( (fault_bound+1) - values_nontarget, 0 )
+				#make sure there's at least t+1 of each for split_vote or split_hold
+
+			elif thisInstance['gameplan'] == 'force_decide':
+				messages_to_change_to_target = max( (fault_bound+1) - values_target, 0 )
+				messages_to_change_to_nontarget = 0
+				#we only need t+1 target for force_decide
+
+			elif thisInstance['gameplan'] == 'lie_like_a_rug':
+				messages_to_change_to_target = min(fault_bound, values_nontarget) 
+				messages_to_change_to_nontarget = 0
+				#naive adversary - change as many nodes to target as we can!
+			
+				#this may be the simplest, because it has no timing changes.
+				#If we have no target, we pick the first N nodes that darken our doorways 
+			else: 
+				#if we somehow got here, failsafe: do nothing
+				#TODO: print warning
+				messages_to_change_to_target = 0
+				messages_to_change_to_nontarget = 0
+		
+			if messages_to_change_to_nontarget == 0:
+				messages_to_change = messages_to_change_to_target
+				dir_to_change_to = thisInstance['target_value']
+			elif messages_to_change_to_target == 0:
+				messages_to_change = messages_to_change_to_nontarget
+				dir_to_change_to = not thisInstance['target_value']
+			else: #both are nonzero
+				print "Error: Ended up having to change messages in both directions!"
+				exit()
+		
+			log("Messages stack up at {}T/{}F; changing {} messages to {}.".format(thisInstance['wave_one_bracha_values'][1],thisInstance['wave_one_bracha_values'][0],messages_to_change,dir_to_change_to))
+		
+			messages_actually_changed = 0
+			#now actually change all those held messages
+			for thisMessage in thisInstance['held_messages']['wave1_wait']:
+				if messages_to_change == 0 or message['body'][2][0] == dir_to_change_to:
+					return_value_message(thisMessage) #don't change anything
+				else:
+					messages_to_change -= 1
+					altered_message, changed = maybe_change_bracha_message(thisMessage, dir_to_change_to)
+					if changed:
+						messages_actually_changed += 1
+					return_value_message(altered_message)
+		
+			log("Was able to alter {} messages.".format(messages_actually_changed))
+			thisInstance['held_messages']['wave1_wait'] = [] #now clear messages
+			#iter_rollover(thisInstance,'bracha','value') #next iteration and/or epoch
+			thisInstance ['wave_one_bracha_values'] = [set(),set()] #clear out bracha message buckets
+	elif wave == 2:
+		if thisInstance['gameplan'] == 'force_decide':
+			#for force_decide, the overtaken nodes will still emit the original value on wave 2 - this is because they store their natural emitted wave 1 value and reject the altered copy. So, the adversary has to alter their values on wave 2, too.
+			if value != thisInstance['target_value']:
+				altered_message, changed = maybe_change_bracha_message(message, thisInstance['target_value'])
+				if changed:
+					log("Changed message value to {}".format(altered_message['body'][2][0]))
+			log("Returning message.")
+			return_value_message(altered_message)
+				
+	elif wave == 3:
+		deciding = message['body'][2][1] #get deciding flag
+	else: 
+		#wtf?
+		#TODO: throw exception
+		pass
+	
+	
 	
 	if wave != 1: #the adversary doesn't interfere with the value of Wave 2+ bracha messages.
 	#exception is for Lie Like A Rug, in which case it changes the values on its own nodes to match target, or just flip.
@@ -438,84 +533,20 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 			
 	
 	#past this point assert wave == 1		
-
-	#if rbid[0] not in thisInstance['wave_one_bracha_values'][1 if value else 0]: 
-	thisInstance['wave_one_bracha_values'][1 if value else 0].add(message['sender']) #rbid[0]) #store the node in the right bucket
-	log("Holding wave 1 value message.")
-	hold_message(message, 'wave1_wait')	#store the message so the adversary can process them as a batch
-
-	if len(thisInstance['wave_one_bracha_values'][0])+len(thisInstance['wave_one_bracha_values'][1]) == num_nodes:
-		#once everyone has reported in, start changing values.
-		#yeah, yeah, I know. The adversary for a fault-tolerant system isn't fault-tolerant itself! It's ironic, isn't it?
 	
-		#so: we're altering the values of wave 1 messages.
-		#how many nodes are already on our side?
-		log("About to process held wave 1 value messages.")
-		values_target = len(thisInstance['wave_one_bracha_values'][1 if thisInstance['target_value'] else 0])
-		#how many nodes are against us?
-		values_nontarget = len(thisInstance['wave_one_bracha_values'][0 if thisInstance['target_value'] else 1])
-		
-		messages_to_change = 0
-		dir_to_change_to = None
-		
-		if thisInstance['gameplan'] == 'split_vote' or thisInstance['gameplan'] == 'split_hold':
-			messages_to_change_to_target = max( (fault_bound+1) - values_target, 0 )
-			messages_to_change_to_nontarget = max( (fault_bound+1) - values_nontarget, 0 )
-			#make sure there's at least t+1 of each for split_vote or split_hold
-
-		elif thisInstance['gameplan'] == 'force_decide':
-			messages_to_change_to_target = max( (fault_bound+1) - values_target, 0 )
-			messages_to_change_to_nontarget = 0
-			#we only need t+1 target for force_decide
-
-		elif thisInstance['gameplan'] == 'lie_like_a_rug':
-			messages_to_change_to_target = min(fault_bound, values_nontarget) 
-			messages_to_change_to_nontarget = 0
-			#naive adversary - change as many nodes to target as we can!
-			
-			#this may be the simplest, because it has no timing changes.
-			#If we have no target, we pick the first N nodes that darken our doorways 
-		else: 
-			#if we somehow got here, failsafe: do nothing
-			#TODO: print warning
-			messages_to_change_to_target = 0
-			messages_to_change_to_nontarget = 0
-		
-		if messages_to_change_to_nontarget == 0:
-			messages_to_change = messages_to_change_to_target
-			dir_to_change_to = thisInstance['target_value']
-		elif messages_to_change_to_target == 0:
-			messages_to_change = messages_to_change_to_nontarget
-			dir_to_change_to = not thisInstance['target_value']
-		else: #both are nonzero
-			print "Error: Ended up having to change messages in both directions!"
-			exit()
-		
-		log("Messages stack up at {}T/{}F; changing {} messages to {}.".format(thisInstance['wave_one_bracha_values'][1],thisInstance['wave_one_bracha_values'][0],messages_to_change,dir_to_change_to))
-		
-		messages_actually_changed = 0
-		#now actually change all those held messages
-		for thisMessage in thisInstance['held_messages']['wave1_wait']:
-			if messages_to_change == 0 or message['body'][2][0] == dir_to_change_to:
-				return_value_message(thisMessage) #don't change anything
-			else:
-				messages_to_change -= 1
-				altered_message, changed = maybe_change_bracha_message(thisMessage, dir_to_change_to)
-				if changed:
-					messages_actually_changed += 1
-				return_value_message(altered_message)
-		
-		log("Was able to alter {} messages.".format(messages_actually_changed))
-		thisInstance['held_messages']['wave1_wait'] = [] #now clear messages
-		#iter_rollover(thisInstance,'bracha','value') #next iteration and/or epoch
-		thisInstance ['wave_one_bracha_values'] = [set(),set()] #clear out bracha message buckets
+	
 	
 	
 def process_bracha_message_timing(message,thisInstance):#rbid,thisInstance):
 	#this is handled similarly to bracha message value. We wait for all messages to come in, then release them in a set order. 
 	#the most common behavior for the adversary will be to release certain messages, then hold the rest until the end of the iteration.
+	
+	log("{} Received bracha timing message {}, from {} to {}.".format(thisInstance['ID'],message['body'],message['meta']['rbid'][0],message['sender']))
+	
 	if thisInstance['gameplan'] == 'lie_like_a_rug' or thisInstance['gameplan'] == None:
+		log("Returning message - this gameplan doesn't alter timing.")
 		return_timing_message(message) #shaker doesn't alter message values, ever. It just messes with timing.
+		return
 	#TODO: add EOI check.
 
 	#TODO: add 'shaker'
@@ -529,22 +560,27 @@ def process_bracha_message_timing(message,thisInstance):#rbid,thisInstance):
 		
 	if thisInstance['timing_quotas'][wave] is None:
 		#no quota - return
+		log("Returning message - no quota.")
 		return_timing_message(message)
 	else:
 		quota = thisInstance['timing_quotas'][wave][sender]
 		if wave == 1 or wave == 2:
 			quota = thisInstance['timing_quotas'][wave][sender][1 if value else 0]
 			if quota > 0:
+				log("Returning message - in quota. (left: {}T/{}F)".format(thisInstance['timing_quotas'][wave][sender][1],thisInstance['timing_quotas'][wave][sender][0]))
 				thisInstance['timing_quotas'][wave][sender][1 if value else 0] -= 1
 				return_timing_message(message) #OK, clear to go. Send it out.
 			else:
+				log("Holding message.")
 				hold_message_timing(message, sender, wave)
 		elif wave == 3:
 			quota = thisInstance['timing_quotas'][wave][sender][1 if deciding else 0]
 			if quota > 0:
+				log("Returning message - in quota. (left: {}T/{}F)".format(thisInstance['timing_quotas'][wave][sender][1],thisInstance['timing_quotas'][wave][sender][0]))
 				thisInstance['timing_quotas'][wave][sender][1 if deciding else 0] -= 1
 				return_timing_message(message) #OK, clear to go. Send it out.
 			else:
+				log("Holding message.")
 				hold_message_timing(message, sender, wave)
 
 
@@ -578,26 +614,68 @@ def process_message_client(message):
 	global current_master_gameplan_bracha, current_master_gameplan_coin
 	#assume it's a gameplan change method
 	try:
-		bracha_changed = False
-		coin_changed = False
-		if message['body'][0].lower() in known_bracha_gameplans and message['body'][0].lower() != current_master_gameplan_bracha:
-			current_master_gameplan_bracha = message['body'][0].lower()
-			bracha_changed = True
-			if current_master_gameplan_bracha == 'none':
-				current_master_gameplan_bracha = None
-			
-		if message['body'][1].lower() in known_coin_gameplans and message['body'][1].lower() != current_master_gameplan_coin:	
-			current_master_gameplan_coin = message['body'][1].lower()
-			coin_changed = True
-			if current_master_gameplan_coin == 'none':
-				current_master_gameplan_coin = None
-		
-		if bracha_changed or coin_changed:
-			MessageHandler.send("Changed adversarial{} gameplan to {}{}{}.".format('' if (bracha_changed and coin_changed) else (' bracha' if bracha_changed else ' coin'), current_master_gameplan_bracha if bracha_changed else '', '/' if bracha_changed and coin_changed else '', current_master_gameplan_coin if coin_changed else ''), None,'client', type_override='announce')
-		else: 
-			MessageHandler.send("Couldn't change adversarial gameplan.", None,'client', type_override='announce')
+		mode = message['meta']['mode']
 	except IndexError:
-		MessageHandler.send("Couldn't change adversarial gameplan.", None,'client', type_override='announce')
+		MessageHandler.send("Received invalid adversary command.", None,'client', type_override='announce')
+	
+	
+	if mode == 'set_gameplan':
+		try:
+			bracha_changed = False
+			coin_changed = False
+			if message['body'][0].lower() in known_bracha_gameplans and message['body'][0].lower() != current_master_gameplan_bracha:
+				current_master_gameplan_bracha = message['body'][0].lower()
+				bracha_changed = True
+				if current_master_gameplan_bracha == 'none':
+					current_master_gameplan_bracha = None
+				log("Changed Bracha gameplan to {}.".format(current_master_gameplan_bracha))
+			
+			if message['body'][1].lower() in known_coin_gameplans and message['body'][1].lower() != current_master_gameplan_coin:	
+				current_master_gameplan_coin = message['body'][1].lower()
+				coin_changed = True
+				if current_master_gameplan_coin == 'none':
+					current_master_gameplan_coin = None
+				log("Changed Coin gameplan to {}.".format(current_master_gameplan_coin))
+		
+			if bracha_changed or coin_changed:
+				MessageHandler.send("Changed adversarial{} gameplan to {}{}{}.".format('' if (bracha_changed and coin_changed) else (' bracha' if bracha_changed else ' coin'), current_master_gameplan_bracha if bracha_changed else '', '/' if bracha_changed and coin_changed else '', current_master_gameplan_coin if coin_changed else ''), None,'client', type_override='announce')
+			else: 
+				MessageHandler.send("Couldn't change adversarial gameplan.", None,'client', type_override='announce')
+		except IndexError:
+			MessageHandler.send("Couldn't change adversarial gameplan.", None,'client', type_override='announce')
+	elif mode == 'get_gameplan':
+		MessageHandler.send("Gameplan is {}/{}.".format(current_master_gameplan_bracha,current_master_gameplan_coin), None,'client', type_override='announce')
+	elif mode == 'release':
+		try:
+			byzID = message['body'][0]
+			wave = message['body'][1]
+		except IndexError:
+			MessageHandler.send("Received invalid adversary command.", None,'client', type_override='announce')
+			return	
+			
+		if byzID not in instances:
+			print "Release messages command: unknown byzID '{}'.".format(byzID)
+			MessageHandler.send("Received invalid release messages command: unknown byzID '{}'.".format(byzID), None,'client', type_override='announce')	
+			return
+			
+		if wave != 1 and wave != 2 and wave != 3:
+			print "Release messages command: invalid wave#."
+			MessageHandler.send("Received invalid release messages command: wave {} doesn't exist.".format(wave), None,'client', type_override='announce')
+			return
+		
+		print "Releasing messages for instance {}, wave {} by request.".format(byzID, wave)
+		numreturned = 0
+		
+		for message_bucket in instances[byzID]['timing_holds'][wave]:
+			for message in instances[byzID]['timing_holds'][wave][message_bucket]:
+				numreturned += 1
+				return_timing_message(message, skip_log=True)
+		#now clear 'held' list
+		instances[byzID]['timing_holds'][wave] = {} 	
+		
+		print "Returned {} messages.".format(numreturned)
+		MessageHandler.send("Returned {} messages for ID {}, wave {}.".format(numreturned,byzID,wave), None,'client', type_override='announce')
+		
 		
 def process_message_special(message):
 	#used for handling decide messages, eventually.

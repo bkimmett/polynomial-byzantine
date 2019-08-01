@@ -100,9 +100,9 @@ def send(message,metadata,destination,type_override=None):
 	return
 
 
-def sendAsAdversary(message,metadata,destination):
+def sendAsAdversary(message,metadata,destination,type_override=None):
 	#sends back filtered message from adversary to be accepted.
-	__backch_producer.publish(message,routing_key=str(destination)+'-adv',headers={"meta":metadata}, serializer='json')
+	__backch_producer.publish(message,routing_key=str(destination)+'-adv',headers={"meta":metadata, "type":type_override if type_override is not None else 'node', "sender":destination}, serializer='json')
 	
 def adversaryBroadcast(message,metadata,sender='adversary',type_override=None):
 	__producer.publish(message, exchange=__global_exchange, headers={"type":type_override if type_override is not None else 'node',"sender":sender,"meta":metadata}, serializer='json')

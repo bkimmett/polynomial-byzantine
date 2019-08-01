@@ -122,12 +122,24 @@ def main(args):
 					elif command == "adv":
 						gameplan1, gameplan2, leftovers = split(message2+" ", " ", 2)
 						try:
-							MessageHandler.sendToAdversary((gameplan1, gameplan2),{})
+							MessageHandler.sendToAdversary((gameplan1, gameplan2),{'mode':'set_gameplan'})
 							print "Requested adversary set gameplans to '{}/{}'. You should wait for a confirmation message before starting a byzantine instance.".format(gameplan1, gameplan2)
 						except NameError:
 							print "Couldn't send to adversary - it looks like you're not using an adversarial setup."
 						#send format: message, meta, dest
-						
+					elif command == "adv_release":
+						byzID, wave, leftovers = split(message2+" ", " ", 2)
+						try:
+							MessageHandler.sendToAdversary((byzID,wave),{'mode':'release'})
+							print "Requested adversary release held messages for wave {} of byzID {}.".format(wave, byzID)
+						except NameError:
+							print "Couldn't send to adversary - it looks like you're not using an adversarial setup."
+					elif command == "adv_get":
+						try:
+							MessageHandler.sendToAdversary(None,{'mode':'get_gameplan'})
+							print "Adversary should reply with its current gameplans shortly."
+						except NameError:
+							print "Couldn't send to adversary - it looks like you're not using an adversarial setup."
 					elif command == "byz": 
 						byz_ids_so_far += 1
 						byz_id = "{}-{}".format("".join([random_generator.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ') for _ in range(10)]),byz_ids_so_far)
