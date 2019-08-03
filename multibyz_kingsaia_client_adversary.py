@@ -130,10 +130,12 @@ def main(args):
 					elif command == "adv_release":
 						byzID, wave, leftovers = split(message2+" ", " ", 2)
 						try:
-							MessageHandler.sendToAdversary((byzID,wave),{'mode':'release'})
+							MessageHandler.sendToAdversary((byzID,int(wave)),{'mode':'release'})
 							print "Requested adversary release held messages for wave {} of byzID {}.".format(wave, byzID)
 						except NameError:
 							print "Couldn't send to adversary - it looks like you're not using an adversarial setup."
+						except ValueError:
+							print "Usage: adv_release byzID wave#"
 					elif command == "adv_get":
 						try:
 							MessageHandler.sendToAdversary(None,{'mode':'get_gameplan'})

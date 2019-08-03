@@ -67,7 +67,7 @@ def setup_instance(byzID, node_list, target_value=None):
 	instances[byzID]['gameplan'] = current_master_gameplan_bracha 			#adversarial gameplan (bracha)
 	instances[byzID]['gameplan_coin'] = current_master_gameplan_coin 	#adversarial gameplan (global-coin)
 	instances[byzID]['target_value'] = target_value
-	instances[byzID]['held_messages'] = {'wave1_wait':[], 'timing_holds':[None,{},{},{}]} #storage
+	instances[byzID]['held_messages'] = {'wave1_wait':[], 'timing_holds':[None,{},{},{}], 'future_iter':{}, 'future_epoch':{}} #storage
 	instances[byzID]['epoch'] = {'bracha':{'value':0, 'timing':0}, 'coin':{'value':0, 'timing':0}}
 	instances[byzID]['iteration'] = {'bracha':{'value':0, 'timing':0}, 'coin':{'value':0, 'timing':0}} #the adversary, because it has stalling decisions over the rest of the game, tracks these separately.
 	#TODO: Iteration turnover.
@@ -96,6 +96,7 @@ def setup_quotas(gameplan, node_list, target_value):
 		quota_list[1] = {}
 		for node in node_list: 
 			quota_list[1][node] = [minority_bound,num_nodes] if target_value else [num_nodes,minority_bound]
+		print repr(quota_list[1])
 		return quota_list
 		
 	if gameplan == "split_vote":
@@ -276,11 +277,10 @@ def hold_message_timing(message,sender,wave):
 	instances[instance]['held_messages']['timing_holds'][wave][sender].append(message)
 	
 	
-def release_messages(instance, key): #, message_processor):
-	maybe_setup_instance(instance)
+def release_messages(thisInstance, key): #, message_processor):
 
-	temp_messages_bucket = instances[instance]['held_messages'][key] #copy messages into temp bucket
-	instances[instance]['held_messages'][key] = [] #clear actual message bucket
+	temp_messages_bucket = thisInstance['held_messages'][key] #copy messages into temp bucket
+	thisInstance['held_messages'][key] = [] #clear actual message bucket
 
 	for message in temp_messages_bucket:
 		#process each held message again
@@ -454,6 +454,10 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 			thisInstance['held_messages']['wave1_wait'] = [] #now clear messages
 			#iter_rollover(thisInstance,'bracha','value') #next iteration and/or epoch
 			thisInstance ['wave_one_bracha_values'] = [set(),set()] #clear out bracha message buckets
+			
+			thisInstance['iteration']['bracha']['value'] += 1 #update iteration
+			release_messages(thisInstance, 'future_iter') #messages held for a future iteration will be reprocessed now.
+			
 	elif wave == 2:
 		if thisInstance['gameplan'] == 'force_decide':
 			#for force_decide, the overtaken nodes will still emit the original value on wave 2 - this is because they store their natural emitted wave 1 value and reject the altered copy. So, the adversary has to alter their values on wave 2, too.
@@ -563,7 +567,13 @@ def process_bracha_message_timing(message,thisInstance):#rbid,thisInstance):
 		log("Returning message - no quota.")
 		return_timing_message(message)
 	else:
-		quota = thisInstance['timing_quotas'][wave][sender]
+		try:
+			quota = thisInstance['timing_quotas'][wave][sender]
+		else KeyError:
+			print "You started the adversary with the wrong node names. Start the adversary again and redo the instance you were trying to do from scratch."
+			MessageHandler.shutdown()
+			exit()
+			
 		if wave == 1 or wave == 2:
 			quota = thisInstance['timing_quotas'][wave][sender][1 if value else 0]
 			if quota > 0:
@@ -666,31 +676,57 @@ def process_message_client(message):
 		print "Releasing messages for instance {}, wave {} by request.".format(byzID, wave)
 		numreturned = 0
 		
-		for message_bucket in instances[byzID]['timing_holds'][wave]:
-			for message in instances[byzID]['timing_holds'][wave][message_bucket]:
+		for message_bucket in instances[byzID]['held_messages']['timing_holds'][wave]:
+			for message in instances[byzID]['held_messages']['timing_holds'][wave][message_bucket]:
 				numreturned += 1
 				return_timing_message(message, skip_log=True)
 		#now clear 'held' list
-		instances[byzID]['timing_holds'][wave] = {} 	
+		instances[byzID]['held_messages']['timing_holds'][wave] = {} 	
 		
 		print "Returned {} messages.".format(numreturned)
 		MessageHandler.send("Returned {} messages for ID {}, wave {}.".format(numreturned,byzID,wave), None,'client', type_override='announce')
 		
 		
 def process_message_special(message):
-	#used for handling decide messages, eventually.
+	#used for handling decide messages and start of iteration / epoch messages.
 	#TODO
-	pass		
+	#for epoch/iter: wait for totality, flip over (release held)
+	#for decide: release held if it matters
+	
+	thisInstance = get_message_ID(message)
+	
+	#body[0] will also send start of iteration, epoch messages 
+	
+	if message['body'][0] == 'done':
+		thisInstance['decide_messages_counted'] += 1
+		#body[1] is the nature of the decision - 'flip' or 'flip_hold' or 'decide'
 		
+		if message['sender'] in thisInstance['held_messages']['timing_holds'][3]: #held msgs present?
+			messages_to_release = thisInstance['held_messages']['timing_holds'][3][message['sender']]
+			log("Releasing {} wave 2 timing hold messages for {}.".format(len(messages_to_release),message['sender']))
+			thisInstance['held_messages']['timing_holds'][2][message['sender']] = [] #remove held messages
+			for released_message in messages_to_release:
+				return_timing_message(released_message)
+		
+		if thisInstance['decide_messages_counted'] == num_nodes:
+			thisInstance['iteration']['bracha']['timing'] += 1
+			instances[byzID]['timing_quotas'] = setup_quotas(instances[byzID]['gameplan'], node_list, target_value) #reset timing quotas
+			release_messages(thisInstance, 'future_iter') #messages held for a future iteration will be reprocessed now.
+
 
 def process_message(message, reprocess=False):
 	message_type = message['type']
+	
+	if message['type'] == "halt":
+		#this is for local-machine testing purposes only.
+		print "Received shutdown message. Shutting down."
+		MessageHandler.shutdown()
+		exit(0)
+	
 	if message_type == 'client':
 		#do something special
 		process_message_client(message)
 		return
-	
-	
 	
 	instance = get_message_ID(message)
 	try:
@@ -706,9 +742,9 @@ def process_message(message, reprocess=False):
 		
 	if msgType is None:
 		return #bad message
-	if code != 'value' and code != 'timing':
-		process_message_special(message)
-		return #unusual message
+		
+	if code != 'value' and code != 'timing' and code != 'info':
+		return #huh?
 	
 	
 	maybe_setup_instance(instance)
