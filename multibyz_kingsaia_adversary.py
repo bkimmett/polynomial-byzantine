@@ -37,6 +37,7 @@ known_bracha_gameplans = ['none','split_vote','split_hold','force_decide','shake
 known_coin_gameplans = ['none','lie_like_a_rug','wedge','blast','wedge_blast']
 
 debug = True
+debug_messages = False
 
 #SETUP:
 
@@ -341,7 +342,7 @@ def maybe_change_message(message, new_body, only_if_node_already_overtaken=False
 	return message, False
 			
 			
-def maybe_change_bracha_message(message, new_value):
+def maybe_change_bracha_message(message, new_value, skip_nonadversarial=False):
 	#wrapper to change bracha values
 	updated_value = list(message['body'][2])
 	updated_value[0] = new_value
@@ -349,7 +350,7 @@ def maybe_change_bracha_message(message, new_value):
 	updated_body[2] = tuple(updated_value)
 				
 	#altered_message, success = maybe_change_message(message, updated_body) #overwrite message, if possible				
-	return maybe_change_message(message, updated_body) #overwrite message, if possible
+	return maybe_change_message(message, updated_body, only_if_node_already_overtaken=skip_nonadversarial) #overwrite message, if possible
 
 def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 	##KNOWN GAMEPLANS: split_vote, split_hold, force_decide, shaker, lie_like_a_rug:
@@ -404,14 +405,17 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 			dir_to_change_to = None
 		
 			if thisInstance['gameplan'] == 'split_vote' or thisInstance['gameplan'] == 'split_hold':
-				messages_to_change_to_target = max( (fault_bound+1) - values_target, 0 )
-				messages_to_change_to_nontarget = max( (fault_bound+1) - values_nontarget, 0 )
+				messages_to_change_to_target = max( (fault_bound+2) - values_target, 0 )
+				messages_to_change_to_nontarget = max( (fault_bound+2) - values_nontarget, 0 )
 				#make sure there's at least t+1 of each for split_vote or split_hold
+				#try to get t+2 if we can tho - this'll allow for nodes that recognize their own message being altered and reject it to still see t+1 of each type
+				#maybe_change_bracha_message will keep us from goofing up
 
 			elif thisInstance['gameplan'] == 'force_decide':
-				messages_to_change_to_target = max( (fault_bound+1) - values_target, 0 )
+				messages_to_change_to_target = max( (fault_bound+2) - values_target, 0 )
 				messages_to_change_to_nontarget = 0
 				#we only need t+1 target for force_decide
+				#but we try to get t+2
 
 			elif thisInstance['gameplan'] == 'lie_like_a_rug':
 				messages_to_change_to_target = min(fault_bound, values_nontarget) 
@@ -441,32 +445,34 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 			messages_actually_changed = 0
 			#now actually change all those held messages
 			for thisMessage in thisInstance['held_messages']['wave1_wait']:
-				if messages_to_change == 0 or message['body'][2][0] == dir_to_change_to:
+				#log("Deciding whether to change message from {} with value {}.".format(thisMessage['sender'],thisMessage['body'][2][0]))
+				if messages_to_change == 0 or thisMessage['body'][2][0] == dir_to_change_to:
+					#log("Decided: not changing.")
 					return_value_message(thisMessage) #don't change anything
 				else:
+					#log("Changing message.")
+					
 					messages_to_change -= 1
 					altered_message, changed = maybe_change_bracha_message(thisMessage, dir_to_change_to)
 					if changed:
 						messages_actually_changed += 1
+						#When changing a message, alter its personal quota to reduce it by one for its original message. This prevents jams where the node can decide inconsistently.
+						thisInstance['timing_quotas'][1][thisMessage['sender']][1 if thisMessage['body'][2][0] else 0] -= 1
 					return_value_message(altered_message)
 		
 			log("Was able to alter {} messages.".format(messages_actually_changed))
-			thisInstance['held_messages']['wave1_wait'] = [] #now clear messages
-			#iter_rollover(thisInstance,'bracha','value') #next iteration and/or epoch
-			thisInstance ['wave_one_bracha_values'] = [set(),set()] #clear out bracha message buckets
-			
-			thisInstance['iteration']['bracha']['value'] += 1 #update iteration
-			release_messages(thisInstance, 'future_iter') #messages held for a future iteration will be reprocessed now.
 			
 	elif wave == 2:
 		if thisInstance['gameplan'] == 'force_decide':
 			#for force_decide, the overtaken nodes will still emit the original value on wave 2 - this is because they store their natural emitted wave 1 value and reject the altered copy. So, the adversary has to alter their values on wave 2, too.
 			if value != thisInstance['target_value']:
-				altered_message, changed = maybe_change_bracha_message(message, thisInstance['target_value'])
+				altered_message, changed = maybe_change_bracha_message(message, thisInstance['target_value'], skip_nonadversarial=True)
 				if changed:
 					log("Changed message value to {}".format(altered_message['body'][2][0]))
-			log("Returning message.")
-			return_value_message(altered_message)
+				log("Returning message.")
+				return_value_message(altered_message)
+			else: 
+				return_value_message(message)
 				
 	elif wave == 3:
 		deciding = message['body'][2][1] #get deciding flag
@@ -569,7 +575,7 @@ def process_bracha_message_timing(message,thisInstance):#rbid,thisInstance):
 	else:
 		try:
 			quota = thisInstance['timing_quotas'][wave][sender]
-		else KeyError:
+		except KeyError:
 			print "You started the adversary with the wrong node names. Start the adversary again and redo the instance you were trying to do from scratch."
 			MessageHandler.shutdown()
 			exit()
@@ -709,6 +715,12 @@ def process_message_special(message):
 				return_timing_message(released_message)
 		
 		if thisInstance['decide_messages_counted'] == num_nodes:
+			#flip iteration
+			thisInstance['held_messages']['wave1_wait'] = [] #now clear messages
+			#iter_rollover(thisInstance,'bracha','value') #next iteration and/or epoch
+			thisInstance ['wave_one_bracha_values'] = [set(),set()] #clear out bracha message buckets
+			
+			thisInstance['iteration']['bracha']['value'] += 1 #update iteration		
 			thisInstance['iteration']['bracha']['timing'] += 1
 			instances[byzID]['timing_quotas'] = setup_quotas(instances[byzID]['gameplan'], node_list, target_value) #reset timing quotas
 			release_messages(thisInstance, 'future_iter') #messages held for a future iteration will be reprocessed now.
@@ -722,11 +734,19 @@ def process_message(message, reprocess=False):
 		print "Received shutdown message. Shutting down."
 		MessageHandler.shutdown()
 		exit(0)
+		
+	if debug_messages:
+		log("Received raw message: {}".format(message))
 	
 	if message_type == 'client':
 		#do something special
 		process_message_client(message)
 		return
+	
+	if message['sender'] not in all_nodes:
+		print "You started the adversary with the wrong node names - the adversary just received a message from a node it's never heard of. Start the adversary again. Your current instance may need to be rerun."
+		MessageHandler.shutdown()
+		exit()
 	
 	instance = get_message_ID(message)
 	try:
@@ -818,6 +838,7 @@ def main(args):
 			sleep(1) #wait a second before we check again.
 		else:
 			weSaidNoMessages = False
+				
 			process_message(adv_message)
 
 	

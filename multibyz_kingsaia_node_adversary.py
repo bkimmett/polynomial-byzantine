@@ -2,12 +2,13 @@
 
 from __future__ import division #utility
 import random					#for coin flips
-from sys import argv, exit, stdout 		#utility
+from sys import argv, exit, stdout, exc_info 		#utility
 from time import sleep, strftime 	#to wait for messages, and for logging
 from math import floor, sqrt, log 			#utility
 from copy import deepcopy 		#utility
 import numpy as np 				#for matrix operations in _processEpoch
 from json import dumps			#for making UIDs good
+import traceback 				#debugging
 import multibyz_kingsaia_network_adversary as MessageHandler 
 #getting an error with the above line? 'pip install kombu'
 import collections				#for data type checking of messages
@@ -601,6 +602,7 @@ class ByzantineAgreement:
 					self.log("Holding uncertain wave 2 bracha message from {}, might not have enough wave 1 messages to validate {}.".format(rbid[0],msgValue))
 					self.holdForLaterWave(message, 2, msgValue) #needs self.initial_validation_bound messages of same type to release
 						#self.initial_validation_bound - self.brachaMsgCtrTotal[0][1 if msgValue else 0])
+					return
 				else:
 					#...and we're not going to be able to hit it in this go-round.
 					self.log("Discarding unvalidateable wave 2 bracha message from {}, not enough wave 1 messages to validate {}.".format(rbid[0],msgValue))
@@ -628,6 +630,7 @@ class ByzantineAgreement:
 					#...but we COULD hit it later.
 					self.log("Holding uncertain wave 3 bracha message from {}, might not have enough wave 2 messages to validate {}.".format(rbid[0],msgValue))
 					self.holdForLaterWave(message, 3, msgValue) #(self.num_nodes // 2 + 1) - self.brachaMsgCtrTotal[1][1 if msgValue else 0]) #second number is minimum number of messages needed before recheck 
+					return
 				else:
 					#...and we're not going to be able to hit it in this go-round.
 					self.log("Discarding unvalidateable wave 3 bracha message from {}, not enough wave 2 messages to validate {}.".format(rbid[0],msgValue))
@@ -692,6 +695,7 @@ class ByzantineAgreement:
 					
 		except KeyError:
 			self.log("Received a bracha message from a node I've never heard of: {} via {}.".format(rbid[0], message['sender']))
+			#traceback.print_exc(None,stdout)
 			#IMPORTANT: so we have a specific defined behavior here: **We throw out the message.** This IS the flexible-node-list resilient behavior. Why? Because the node list is set at the start of the node opening the byzantine instance. If a new node is added to the global roster, it can jump in on new byzantine instances but not ones that are already in progress!
 			return 
 		
@@ -778,7 +782,7 @@ class ByzantineAgreement:
 				return
 		
 			if message_i < 0 or message_i >= self.num_nodes: ###is this the right message_i max?
-				self.log("Invalid coinflip message from {} via {}, impossible round# {}.".format(rbid[0], message['sender'],message_i))
+				self.log("Invalid coinflip message from {} via {}, impossible round# {}.".format(rbid[0], message['sender'],message_i+1))
 				return
 		
 			if message_j not in self.nodes:
@@ -803,7 +807,7 @@ class ByzantineAgreement:
 				this_coinboard = self.coinboard
 			
 			if not self.ensureCoinboardPosExists(this_coinboard, message_i, message_j):
-				self.log("Couldn't accept {}'s coin flip message - impossible round (i) number: {}.".format(rbid[0],message_i))
+				self.log("Couldn't accept {}'s coin flip message - impossible round (i) number: {}.".format(rbid[0],message_i+1))
 				return
 			
 			#replaced with ensureCoinboardPosExists	
@@ -843,17 +847,23 @@ class ByzantineAgreement:
 						#We have two messages with different values? This isn't supposed to happen. Blacklist the node...
 						self.log("{} sent the same flip twice, with two different values. Discarding/blacklisting.".format(rbid[0]))
 						self.blacklistNode(rbid[0])
-					
+					else:
+						self.log("Received duplicate coin flip #{} from {}, value {}.".format(message_i, message_j, message_value))
 					#either way, if it's a copy with the same value, we just throw it out - duplicate. 	
 					return
 						
 			
 			if mode == MessageMode.coin_ack:
+				if rbid[0] in this_coinboard[message_i][message_j][1]:
+					self.log("Received duplicate acknowledgement from {} for coin flip #{} of node {}. (Sender: {})".format(rbid[0], message_i+1, message_j,message['sender']))
+					#duplicates CAN happen! This prevents any shenanigans from going on.
+					return
+				
 				this_coinboard[message_i][message_j][1].add(rbid[0]) #sender of broadcast
-				self.log("Received acknowledgement from {} for coin flip #{} of node {}.".format(rbid[0], message_i, message_j))
+				self.log("Received acknowledgement from {} for coin flip #{} of node {}. (Sender: {})".format(rbid[0], message_i+1, message_j,message['sender']))
 				#Check number of acknowledgements.
 				if len(this_coinboard[message_i][message_j][1]) == self.num_nodes-self.fault_bound:
-					self.log("Got enough acknowledgements for coin flip #{} of node {}.".format(message_i, message_j))
+					self.log("Got enough acknowledgements for coin flip #{} of node {}.".format(message_i+1, message_j))
 					#we've hit the boundary number of acknowledgements! (n-t)
 					#we trigger this only once - it does things like continue the state.				
 					#we also (if we're in Stage 1) need to check for the number of acknowledgements - if we get enough columns, we move on to stage 2. (If we're in Stage 0, we store that we're ready to move on until Stage 1...)
@@ -884,10 +894,11 @@ class ByzantineAgreement:
 								self.log("SERIOUS ERROR: OK, so we just received the correct number of acknowledgements for one of our {} coin flips, and not the one we just broadcast (currently {} vs {} received). This SHOULD be completely impossible without time travel, glitch, or forgery on a grand scale. ".format("earlier" if message_i < self.lastCoinBroadcast else "later", self.lastCoinBroadcast, message_i))
 								#TODO: But do we DO anything about it?
 							else:
-								self.log("Got enough acknowledgements for our own coin flip #{}.".format(message_i))
+								self.log("Got enough acknowledgements for our own coin flip #{}.".format(message_i+1))
 								self.lastCoinBroadcast += 1
 								if self.lastCoinBroadcast < self.num_nodes:
 									coin = self._broadcastCoin(self.lastCoinBroadcast)
+									self.log("Broadcast my next coin flip (#{}): {}.".format(self.lastCoinBroadcast+1,coin))
 									##TODO: This can never happen while the coinboard is undefined, right?
 									self.ensureCoinboardPosExists(self.coinboard, self.lastCoinBroadcast, username)
 									
@@ -953,6 +964,7 @@ class ByzantineAgreement:
 				if list_looks_OK == False:
 				#TODO: list_looks_OK will be None if there was an error. Handle this error.
 					self.holdCoinListForLater(message, coin_list) #TODO: Will this ever trigger? Surely the checkCoinboardHolding will catch it first, right?
+					return
 				#hold list for later
 			
 		else:
@@ -993,6 +1005,7 @@ class ByzantineAgreement:
 		#	self.coinboard[0][username] = [None,set()] #put our first coin here
 		
 		coin_value = self._broadcastCoin(0)
+		self.log("Broadcast my first coin flip: {}.".format(coin_value))
 		
 		self.coinboard[0][username][0] = coin_value #store our first coin in the coinboard
 		
@@ -1023,11 +1036,13 @@ class ByzantineAgreement:
 		return flip #so we can use it too
 		
 	def _acknowledgeCoin(self,message_i,message_j):
+		self.log("Acknowledged {}'s coin flip #{} ({}).".format(message_j,message_i,self.coinboard[message_i][message_j][0]))
 		ReliableBroadcast.broadcast((MessageMode.coin_ack, message_i, message_j),extraMeta=(self.ID,self.epoch,self.iteration))	
 		
 	
 	def _finalizeCoinboard(self):
 		coinCount = 0	
+		self.log("Finalizing coinboard.")
 		#TODO: When do we generate the numpy array? Or whatever we're using.
 		for node in self.coinboardLogs:
 			if abs(self.coinboardLogs[node][self.iteration]) > 5 * sqrt( self.num_nodes * log(self.num_nodes) ):
@@ -1049,9 +1064,12 @@ class ByzantineAgreement:
 		else:
 			self.epochFlips.append(1 if coinCount >= 0 else -1)
 			
-		
+		self.log("Coinboard value is {}.".format(coinCount >= 0))
 		if self.useCoinValue:
+			self.log("Using coinboard value.")
 			self.value = (True,) if coinCount >= 0 else (False,) #the second item is the Decide flag
+		else:
+			self.log("Not using coinboard value (hold value).")
 		#else:
 			#we don't set the value here. see note early on in _brachaFinal().
 			
@@ -1088,6 +1106,7 @@ class ByzantineAgreement:
 					buildingDict[coin_j] = index
 				
 		coinList = [[key,value] for key, value in buildingDict.iteritems()] #key = node name = J. value = highest round = I.
+		self.log("Broadcasting my coin list: {}".format(coinList))
 		#now send off the list
 		ReliableBroadcast.broadcast((MessageMode.coin_list, coinList),extraMeta=(self.ID,self.epoch,self.iteration))	
 		
@@ -1601,8 +1620,9 @@ class ByzantineAgreement:
 			coinboard.append({}) #add rounds as necessary
 		if len(coinboard) <= round:
 			return False #overlength round #
-		if source not in coinboard[round]:
-			coinboard[round][source] = [None,set()]
+		for thru_round in range(round):
+			if source not in coinboard[thru_round]:
+				coinboard[thru_round][source] = [None,set()]
 		return True
 		
 		
