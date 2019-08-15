@@ -814,7 +814,7 @@ class ByzantineAgreement:
 			#while len(this_coinboard) <= message_i:
 			#	this_coinboard.append({}) #add blank extra spaces to fill out board
 			#if message_j not in this_coinboard[message_i]:
-				this_coinboard[message_i][message_j] = [None,set()] #setup record
+			#	this_coinboard[message_i][message_j] = [None,set()] #setup record
 			
 			##OK, we've done some light validation, now store it.
 			
@@ -998,7 +998,7 @@ class ByzantineAgreement:
 	
 	def _globalCoin(self):
 		global username
-		self.ensureCoinboardPosExists(self.coinboard, 1, username)
+		self.ensureCoinboardPosExists(self.coinboard, 0, username)
 		#if len(self.coinboard) < 1:
 		#	self.coinboard.append({})
 		#if username not in self.coinboard[0]:
@@ -1620,7 +1620,7 @@ class ByzantineAgreement:
 			coinboard.append({}) #add rounds as necessary
 		if len(coinboard) <= round:
 			return False #overlength round #
-		for thru_round in range(round):
+		for thru_round in range(round+1):
 			if source not in coinboard[thru_round]:
 				coinboard[thru_round][source] = [None,set()]
 		return True

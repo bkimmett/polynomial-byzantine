@@ -365,6 +365,25 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 	##'lie_like_a_rug' = Any adversarial node insists that the adversary's target value is ideal. Quite possibly unconvincing depending on how things stacked up.
 	log("{} Received bracha value message {} from {}.".format(thisInstance['ID'],message['body'],message['sender']))
 	
+	
+	#figure out what wave it is
+	wave = int(message['body'][1])
+	value = message['body'][2][0]
+	
+	if wave != 1 and wave != 2 and wave != 3:
+		#WTF? bad wave value
+		log("Received a message with a bad wave value: {}. Discarding.".format(wave))
+		return 
+	
+	#When receiving a message, whether we change it or not, alter the node's personal quota to reduce it by one for its original message. This prevents jams where the node can decide inconsistently - the node pre-receives its own message, so we alter the quota to accommodate it. Self-sent messages then travel for free, ignoring quota. (We could always not let them through, with an indefinite hold - in case we're worried about nodes catching on that their value has been altered. But it's easier to just let the messages through for now.)
+	# A CONCERN: Sooner or later some node will get its quota decremented late 'cause it sent out its value very late, AFTER all the messages have come in and made it decide in a way the adversary didn't want. There's no good way to handle this while maintaining full async. The adversary could also hold off on letting the node receive messages for a wave until it's sent its own value, but this is an advanced enough scenario that if it goes wrong we can just rerun the tests again.
+	#
+	#...making an adversary is hard. Also, old man Bracha was a genius. 
+	if thisInstance['timing_quotas'][wave] is not None:
+		if thisInstance['timing_quotas'][wave][message['sender']] is not None:
+			if thisInstance['timing_quotas'][wave][message['sender']][1 if message['body'][2][0] else 0] > 0:
+				thisInstance['timing_quotas'][wave][message['sender']][1 if message['body'][2][0] else 0] -= 1
+	
 	if thisInstance['gameplan'] == 'shaker' or thisInstance['gameplan'] == None:
 		log("Returning message - no changes with this gameplan.")
 		return_value_message(message) #shaker doesn't alter message values, ever. It just messes with timing.
@@ -378,12 +397,6 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 		log("Returning message.")
 		return_value_message(altered_message)
 		return
-		
-	#figure out what wave it is
-	wave = int(message['body'][1])
-	value = message['body'][2][0]
-	
-
 	
 	if wave == 1:
 		thisInstance['wave_one_bracha_values'][1 if value else 0].add(message['sender']) #rbid[0]) #store the node in the right bucket
@@ -446,8 +459,10 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 			#now actually change all those held messages
 			for thisMessage in thisInstance['held_messages']['wave1_wait']:
 				#log("Deciding whether to change message from {} with value {}.".format(thisMessage['sender'],thisMessage['body'][2][0]))
+				
+				
 				if messages_to_change == 0 or thisMessage['body'][2][0] == dir_to_change_to:
-					#log("Decided: not changing.")
+					#log("Decided: not changing.")					
 					return_value_message(thisMessage) #don't change anything
 				else:
 					#log("Changing message.")
@@ -456,8 +471,7 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 					altered_message, changed = maybe_change_bracha_message(thisMessage, dir_to_change_to)
 					if changed:
 						messages_actually_changed += 1
-						#When changing a message, alter its personal quota to reduce it by one for its original message. This prevents jams where the node can decide inconsistently.
-						thisInstance['timing_quotas'][1][thisMessage['sender']][1 if thisMessage['body'][2][0] else 0] -= 1
+						
 					return_value_message(altered_message)
 		
 			log("Was able to alter {} messages.".format(messages_actually_changed))
@@ -473,77 +487,77 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 				return_value_message(altered_message)
 			else: 
 				return_value_message(message)
-				
-	elif wave == 3:
-		deciding = message['body'][2][1] #get deciding flag
-	else: 
-		#wtf?
-		#TODO: throw exception
-		pass
-	
-	
-	
-	if wave != 1: #the adversary doesn't interfere with the value of Wave 2+ bracha messages.
-	#exception is for Lie Like A Rug, in which case it changes the values on its own nodes to match target, or just flip.
-		if thisInstance['gameplan'] == 'lie_like_a_rug':
+		elif thisInstance['gameplan'] == 'lie_like_a_rug':
 			#adversary prepares fake message
 			altered_message, changed = maybe_change_bracha_message(message, (False if value else True) if thisInstance['target_value'] is None else thisInstance['target_value'] ) #overwrite message, if possible. if we don't have a target, swap the bit of the message. If we do have a target, set the value to that.
 			if changed:
 				log("Changed message value to {}".format(altered_message['body'][2][0]))
 			log("Returning message.")
 			return_value_message(altered_message)
-			return
 		else:
+			#gameplan doesn't affect this
 			log("Returning message.")
 			return_value_message(message)
-			
-			if wave == 2:
-				thisInstance['wave_two_messages_counted'] += 1
 				
-				if message['sender'] in thisInstance['held_messages']['timing_holds'][1]: #held msgs present?
-					messages_to_release = thisInstance['held_messages']['timing_holds'][1][message['sender']]
-					log("Releasing {} wave 1 timing hold messages for {}.".format(len(messages_to_release),message['sender']))
-					thisInstance['held_messages']['timing_holds'][1][message['sender']] = [] #remove held messages
-					for released_message in messages_to_release:
-						return_timing_message(released_message)
-					
+	elif wave == 3:
+		deciding = message['body'][2][1] #get deciding flag
+		
+		if thisInstance['gameplan'] == 'force_decide':
+			#for force_decide, the overtaken nodes will still emit the original value on wave 3, too, so we pretend they're deciding with the target value.
+			if value != thisInstance['target_value']:
+				altered_message, changed = maybe_change_bracha_message(message, thisInstance['target_value'], skip_nonadversarial=True)
+				if changed:
+					log("Changed message value to {}".format(altered_message['body'][2][0]))
+					altered_message['body'][2][1] = True #set deciding flag (adversary's lie, or at least adversary's wishful thinking)
+				log("Returning message.")
+				return_value_message(altered_message)
+			else: 
+				return_value_message(message)
 				
-			#we ignore wave 2/3 messages
-			if wave == 3:
-				thisInstance['wave_three_messages_counted'] += 1
-				
-				if message['sender'] in thisInstance['held_messages']['timing_holds'][2]: #held msgs present?
-					messages_to_release = thisInstance['held_messages']['timing_holds'][2][message['sender']]
-					log("Releasing {} wave 2 timing hold messages for {}.".format(len(messages_to_release),message['sender']))
-					thisInstance['held_messages']['timing_holds'][2][message['sender']] = [] #remove held messages
-					for released_message in messages_to_release:
-						return_timing_message(released_message)
-			# 
+		elif thisInstance['gameplan'] == 'lie_like_a_rug':
+			#adversary prepares fake message
+			altered_message, changed = maybe_change_bracha_message(message, (False if value else True) if thisInstance['target_value'] is None else thisInstance['target_value'] ) #overwrite message, if possible. if we don't have a target, swap the bit of the message. If we do have a target, set the value to that.
+			if changed:
+				log("Changed message value to {}".format(altered_message['body'][2][0]))
+			log("Returning message.")
+			return_value_message(altered_message)
+		else:
+			#gameplan doesn't affect this
+			log("Returning message.")
+			return_value_message(message)
+
+
+	#cleanup - if we have later wave value messages, release earlier wave timing messages now	
+	#we used to track iter rollover here, but now we track it on decide messages	
+	if wave == 2:
+		#thisInstance['wave_two_messages_counted'] += 1
+		
+		if message['sender'] in thisInstance['held_messages']['timing_holds'][1]: #held msgs present?
+			messages_to_release = thisInstance['held_messages']['timing_holds'][1][message['sender']]
+			log("Releasing {} wave 1 timing hold messages for {}.".format(len(messages_to_release),message['sender']))
+			thisInstance['held_messages']['timing_holds'][1][message['sender']] = [] #remove held messages
+			for released_message in messages_to_release:
+				return_timing_message(released_message)
+
+	if wave == 3:
+		#thisInstance['wave_three_messages_counted'] += 1
+		
+		if message['sender'] in thisInstance['held_messages']['timing_holds'][2]: #held msgs present?
+			messages_to_release = thisInstance['held_messages']['timing_holds'][2][message['sender']]
+			log("Releasing {} wave 2 timing hold messages for {}.".format(len(messages_to_release),message['sender']))
+			thisInstance['held_messages']['timing_holds'][2][message['sender']] = [] #remove held messages
+			for released_message in messages_to_release:
+				return_timing_message(released_message)
+	# 
 # 			if thisInstance['wave_two_messages_counted'] == num_nodes:
 # 					iter_rollover(thisInstance,'bracha','value') #next iteration and/or epoch, so 
 # 					
 # 					
 # 				#TODO: release held wave 3 timing messages for this node.
-			
-			
-			return
-			
-			#BELOW: old 
-			# if node_is_overtaken(instance, sender): #nodes are decided to be overtaken in Wave 1.
-# 					value = list(message['body'][2]) 
-# 					if instances[instance]['target_value'] is None: #adversary overwrites value
-# 						value[0] = False if value[0] else True #swap value if adv has no target
-# 					else:
-# 						value[0] = instances[instance]['target_value'] #set to target value
-# 					#don't alter deciding in any case. this instruction might change later.
-# 					message['body'][2] = tuple(value)
-# 					return_message(message) #return lying message
-# 				else: 
-# 					return_message(message)	#return untouched message if this node isn't one the adversary can take over
-			
 	
-	#past this point assert wave == 1		
 	
+	return	
+		
 	
 	
 	
@@ -571,6 +585,10 @@ def process_bracha_message_timing(message,thisInstance):#rbid,thisInstance):
 	if thisInstance['timing_quotas'][wave] is None:
 		#no quota - return
 		log("Returning message - no quota.")
+		return_timing_message(message)
+	
+	elif message['meta']['rbid'][0] == message['sender']:
+		log("Returning message - self messages travel free.")
 		return_timing_message(message)
 	else:
 		try:
@@ -611,19 +629,23 @@ def process_coin_message_value(message,thisInstance):#rbid,thisInstance):
 
 	if thisInstance['gameplan_coin'] == 'wedge' or thisInstance['gameplan_coin'] == None:
 		return_value_message(message) #wedge by itself doesn't alter messages.
-		
+		return
+	else:
+	
 	#but we're not messing with coin messages for now. TODO
-	return_value_message(message)
-	return
+		return_value_message(message)
+		return
 	
 	#return message, for now #TODO
 		
 def process_coin_message_timing(message,thisInstance): #rbid,thisInstance):
 	if thisInstance['gameplan_coin'] == 'blast' or thisInstance['gameplan_coin'] == 'lie_like_a_rug' or thisInstance['gameplan_coin'] == None:
 		return_timing_message(message) #blast and lie-like-a-rug don't alter message timing.
-
-	return_timing_message(message) #TODO: for now, do nothing
-	return
+		return
+	else:
+	
+		return_timing_message(message) #TODO: for now, do nothing
+		return
 
 
 def process_message_client(message):
@@ -710,11 +732,13 @@ def process_message_special(message):
 		if message['sender'] in thisInstance['held_messages']['timing_holds'][3]: #held msgs present?
 			messages_to_release = thisInstance['held_messages']['timing_holds'][3][message['sender']]
 			log("Releasing {} wave 2 timing hold messages for {}.".format(len(messages_to_release),message['sender']))
-			thisInstance['held_messages']['timing_holds'][2][message['sender']] = [] #remove held messages
+			thisInstance['held_messages']['timing_holds'][3][message['sender']] = [] #remove held messages
 			for released_message in messages_to_release:
 				return_timing_message(released_message)
 		
 		if thisInstance['decide_messages_counted'] == num_nodes:
+		##TODO: OK, this doesn't work. All we REALLY need to confirm deciding is that n - t nodes will weigh in and broadcast their 'decide' marker to the adversary. So we turn over and release ALL held messages and stop holding new ones at this moment.
+		##BY THE WAY: We should really make this iteration and so on proof.
 			#flip iteration
 			thisInstance['held_messages']['wave1_wait'] = [] #now clear messages
 			#iter_rollover(thisInstance,'bracha','value') #next iteration and/or epoch
