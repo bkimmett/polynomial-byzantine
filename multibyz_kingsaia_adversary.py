@@ -55,31 +55,62 @@ def log(message):
 
 def maybe_setup_instance(byzID, target=default_target):	
 	if byzID not in instances:
-		setup_instance(byzID, all_nodes, target_value=target)	
-	
+		setup_instance(byzID, target_value=target)	
 
 
-def setup_instance(byzID, node_list, target_value=None):
+def setup_instance(byzID, target_value=None):
 	global instances
 	instances[byzID] = {}
+	#the following items are FIXED BY INSTANCE and not dependent on epoch or iterations.
 	instances[byzID]['ID'] = byzID
 	instances[byzID]['iters_per_epoch'] = num_nodes * 2 #default iteration constant.
 	instances[byzID]['fault_list'] = [] #list of nodes the adversary has overtaken in this instance
 	instances[byzID]['gameplan'] = current_master_gameplan_bracha 			#adversarial gameplan (bracha)
 	instances[byzID]['gameplan_coin'] = current_master_gameplan_coin 	#adversarial gameplan (global-coin)
 	instances[byzID]['target_value'] = target_value
-	instances[byzID]['held_messages'] = {'wave1_wait':[], 'timing_holds':[None,{},{},{}], 'future_iter':{}, 'future_epoch':{}} #storage
-	instances[byzID]['epoch'] = {'bracha':{'value':0, 'timing':0}, 'coin':{'value':0, 'timing':0}}
-	instances[byzID]['iteration'] = {'bracha':{'value':0, 'timing':0}, 'coin':{'value':0, 'timing':0}} #the adversary, because it has stalling decisions over the rest of the game, tracks these separately.
-	#TODO: Iteration turnover.
+
+	instances[byzID]['ei_storage'] = {}  #used to store all the stuff that's epoch-iter specific.
+	
+	##REMOVE BELOW THIS LINE AFTER setup_iteration() IS WORKING
+	instances[byzID]['held_messages'] = {'wave1_wait':[], 'timing_holds':[None,{},{},{}]} # , 'future_iter':{}, 'future_epoch':{}} #storage
 	instances[byzID]['wave_one_bracha_values'] = [set(),set()] #state: used to keep track of the wave 1 bracha values.
 	instances[byzID]['wave_two_messages_counted'] = 0
 	instances[byzID]['wave_three_messages_counted'] = 0
 	instances[byzID]['decide_messages_counted'] = 0
-	instances[byzID]['timing_quotas'] = setup_quotas(instances[byzID]['gameplan'], node_list, target_value)
+	instances[byzID]['timing_quotas'] = None #setup_quotas(instances[byzID]['gameplan'], all_nodes, target_value)
+	
+	#the following items are DEPRECATED and will become unused.
+	instances[byzID]['epoch'] = {'bracha':{'value':0, 'timing':0}, 'coin':{'value':0, 'timing':0}}
+	instances[byzID]['iteration'] = {'bracha':{'value':0, 'timing':0}, 'coin':{'value':0, 'timing':0}} #the adversary, because it has stalling decisions over the rest of the game, tracks these separately.
 	
 	
-def setup_quotas(gameplan, node_list, target_value):
+def setup_iteration(thisIteration, target_value=None):		
+	#the following items are FLEXIBLE and are dependent on epoch/iteration.
+	thisIteration['held_messages'] = {'wave1_wait':[], 'timing_holds':[None,{},{},{}]} # , 'future_iter':{}, 'future_epoch':{}} #storage
+	thisIteration['wave_one_bracha_values'] = [set(),set()] #state: used to keep track of the wave 1 bracha values.
+	thisIteration['wave_two_messages_counted'] = 0
+	thisIteration['wave_three_messages_counted'] = 0
+	thisIteration['decide_messages_counted'] = 0
+	thisIteration['timing_quotas'] = None #setup_quotas(thisIteration['gameplan'], all_nodes, target_value)
+	
+	#the following items are DEPRECATED and will become unused.
+	#instances[byzID]['epoch'] = {'bracha':{'value':0, 'timing':0}, 'coin':{'value':0, 'timing':0}}
+	#instances[byzID]['iteration'] = {'bracha':{'value':0, 'timing':0}, 'coin':{'value':0, 'timing':0}} #the adversary, because it has stalling decisions over the rest of the game, tracks these separately.
+	#TODO: Iteration turnover.
+	
+def setup_or_get_EI(thisInstance, epoch, iteration):
+	#maybe_setup_instance(byzID)
+	
+	if epoch not in thisInstance['ei_storage']:
+		thisInstance['ei_storage'][epoch] = {}
+		thisInstance['ei_storage'][epoch][iteration] = setup_iteration(thisInstance['ei_storage'][iteration], target_value=thisInstance['target_value'])
+	elif iteration not in thisInstance['ei_storage'][epoch]:
+		thisInstance['ei_storage'][epoch][iteration] = setup_iteration(thisInstance['ei_storage'][iteration], target_value=thisInstance['target_value'])
+
+	return thisInstance['ei_storage'][epoch][iteration]
+
+	
+def setup_quotas(gameplan, node_message_list, target_value, corrupted_nodes, target_count, nontarget_count):
 	quota_list = [None,None,None,None]
 	
 	if gameplan is None:
@@ -93,10 +124,12 @@ def setup_quotas(gameplan, node_list, target_value):
 
 	#quotas can be None (no quota), or a dict (quota for each node). Inside that dict, you have either a None (no quota for that node) or a list (quota of true, false messages).
 	
+	node_list = [[message['sender'],message['body'][2][0]] for message in node_message_list]
+	
 	if gameplan == "force_decide":
 		quota_list[1] = {}
 		for node in node_list: 
-			quota_list[1][node] = [minority_bound,num_nodes] if target_value else [num_nodes,minority_bound]
+			quota_list[1][node[0]] = [minority_bound,num_nodes] if target_value else [num_nodes,minority_bound]
 		print repr(quota_list[1])
 		return quota_list
 		
@@ -104,10 +137,27 @@ def setup_quotas(gameplan, node_list, target_value):
 		quota_list[1] = {}
 		quota_list[2] = {}
 		flip = target_value
+		force_minority_counter = len(corrupted_nodes)
+		
+		if target_count >= nontarget_count:
+			majority = target_value
+		else:
+			majority = not target_value
+	
+			
+		
 		for node in node_list: 
-			quota_list[2][node] = [num_nodes // 2, num_nodes // 2] #we won't get more than n/2 wave 2 messages of either type, so the deciding flag is never set
-			quota_list[1][node] = [minority_bound,num_nodes] if flip else [num_nodes,minority_bound] #true flip yields 'True' wave 2 message - false flip yields 'False' wave 2 message - this ensures the wave 2 messages are split half and have and the wave 2 quota works
-			flip  = not flip
+			quota_list[2][node[0]] = [num_nodes // 2, num_nodes // 2] #we won't get more than n/2 wave 2 messages of either type, so the deciding flag is never set
+			
+			if node[0] in corrupted_nodes:
+				quota_list[1][node[0]] = [minority_bound,num_nodes] if majority else [num_nodes,minority_bound] #set quota so node receives majority value
+			elif force_minority_counter > 0:
+				quota_list[1][node[0]] = [minority_bound,num_nodes] if not majority else [num_nodes,minority_bound] #set quota so that node receives minority value - to counterbalance majority value going to corrupted nodes
+				force_minority_counter -= 1
+			else:
+				#distribute nodes evenly
+				quota_list[1][node[0]] = [minority_bound,num_nodes] if flip else [num_nodes,minority_bound] #true flip yields 'True' wave 2 message - false flip yields 'False' wave 2 message - this ensures the wave 2 messages are split half and have and the wave 2 quota works
+				flip  = not flip
 		return quota_list	
 		
 	if gameplan == "split_hold":
@@ -120,9 +170,9 @@ def setup_quotas(gameplan, node_list, target_value):
 		
 		for node in node_list:
 			if node in wave_one_subsample:
-				quota_list[1][node] = [minority_bound,num_nodes] if target_value else [num_nodes,minority_bound] #ensure target value is emitted
+				quota_list[1][node[0]] = [minority_bound,num_nodes] if target_value else [num_nodes,minority_bound] #ensure target value is emitted
 			else:
-				quota_list[1][node] = [num_nodes,minority_bound] if target_value else [minority_bound,num_nodes] #nontarget value is emitted
+				quota_list[1][node[0]] = [num_nodes,minority_bound] if target_value else [minority_bound,num_nodes] #nontarget value is emitted
 			
 			#post wave 1: (assuming target is TRUE):
 			#2t TRUE2, rest FALSE2
@@ -130,10 +180,10 @@ def setup_quotas(gameplan, node_list, target_value):
 			#n/2+1 TRUE2, rest FALSE2
 			
 			if node in wave_two_subsample:
-				quota_list[2][node] = [majority - (num_nodes // 2 + 1),num_nodes] if target_value else [num_nodes,majority - (num_nodes // 2 + 1)] #ensure target value is emitted (wave 2 ver) WITH deciding flag and our target value
+				quota_list[2][node[0]] = [majority - (num_nodes // 2 + 1),num_nodes] if target_value else [num_nodes,majority - (num_nodes // 2 + 1)] #ensure target value is emitted (wave 2 ver) WITH deciding flag and our target value
 				
 			else:
-				quota_list[2][node] = [num_nodes // 2, num_nodes // 2] 
+				quota_list[2][node[0]] = [num_nodes // 2, num_nodes // 2] 
 				#ensure deciding flag IS NOT emitted. We don't care about the values that much.
 				#this can't hang because the number of messages required to progress to the next stage will ALWAYS be less than the number the quota will allow, for t < n/3
 				
@@ -149,7 +199,7 @@ def setup_quotas(gameplan, node_list, target_value):
 			#2t #, DECIDING
 			#rest NOT DECIDING	
 			
-			quota_list[3][node] = [majority - (fault_bound + 1),fault_bound*2] 
+			quota_list[3][node[0]] = [majority - (fault_bound + 1),fault_bound*2] 
 			#wave 3 quotas are strange; instead of determining by value, [False,True]
 			#they determine by the deciding flag being set to [False,True].
 			#so here, we allow up to 2t deciding messages. 
@@ -375,14 +425,16 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 		log("Received a message with a bad wave value: {}. Discarding.".format(wave))
 		return 
 	
-	#When receiving a message, whether we change it or not, alter the node's personal quota to reduce it by one for its original message. This prevents jams where the node can decide inconsistently - the node pre-receives its own message, so we alter the quota to accommodate it. Self-sent messages then travel for free, ignoring quota. (We could always not let them through, with an indefinite hold - in case we're worried about nodes catching on that their value has been altered. But it's easier to just let the messages through for now.)
+	#When receiving a message, whether we change it or not, alter the node's personal quota to reduce it by one for its original value. This prevents jams where the node can decide inconsistently - the node pre-receives its own message, so we alter the quota to accommodate it. Self-sent messages then travel for free, ignoring quota. (We could always not let them through, with an indefinite hold - in case we're worried about nodes catching on that their value has been altered. But it's easier to just let the messages through for now.)
 	# A CONCERN: Sooner or later some node will get its quota decremented late 'cause it sent out its value very late, AFTER all the messages have come in and made it decide in a way the adversary didn't want. There's no good way to handle this while maintaining full async. The adversary could also hold off on letting the node receive messages for a wave until it's sent its own value, but this is an advanced enough scenario that if it goes wrong we can just rerun the tests again.
 	#
 	#...making an adversary is hard. Also, old man Bracha was a genius. 
-	if thisInstance['timing_quotas'][wave] is not None:
-		if thisInstance['timing_quotas'][wave][message['sender']] is not None:
-			if thisInstance['timing_quotas'][wave][message['sender']][1 if message['body'][2][0] else 0] > 0:
-				thisInstance['timing_quotas'][wave][message['sender']][1 if message['body'][2][0] else 0] -= 1
+	
+	if thisInstance['timing_quotas'] is not None:
+		if thisInstance['timing_quotas'][wave] is not None:
+			if thisInstance['timing_quotas'][wave][message['sender']] is not None:
+				if thisInstance['timing_quotas'][wave][message['sender']][1 if message['body'][2][0] else 0] > 0:
+					thisInstance['timing_quotas'][wave][message['sender']][1 if message['body'][2][0] else 0] -= 1
 	
 	if thisInstance['gameplan'] == 'shaker' or thisInstance['gameplan'] == None:
 		log("Returning message - no changes with this gameplan.")
@@ -397,6 +449,8 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 		log("Returning message.")
 		return_value_message(altered_message)
 		return
+	
+	#shaker, None, and lie_like_a_rug (bracha gameplans) do not use timing quotas, so we can skip setting them up.
 	
 	if wave == 1:
 		thisInstance['wave_one_bracha_values'][1 if value else 0].add(message['sender']) #rbid[0]) #store the node in the right bucket
@@ -422,7 +476,9 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 				messages_to_change_to_nontarget = max( (fault_bound+2) - values_nontarget, 0 )
 				#make sure there's at least t+1 of each for split_vote or split_hold
 				#try to get t+2 if we can tho - this'll allow for nodes that recognize their own message being altered and reject it to still see t+1 of each type
-				#maybe_change_bracha_message will keep us from goofing up
+				#ideally, though, the adversarial nodes should have quotas to expect the majority value, excluding that node's own altered value
+				#this means the adversarial node will handle things as normal, with the self-values excluded from node quotas.
+				#at this point in the whole business, all value messages have been held, so we CAN still alter quotas without producing undefined behavior.
 
 			elif thisInstance['gameplan'] == 'force_decide':
 				messages_to_change_to_target = max( (fault_bound+2) - values_target, 0 )
@@ -455,7 +511,7 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 		
 			log("Messages stack up at {}T/{}F; changing {} messages to {}.".format(thisInstance['wave_one_bracha_values'][1],thisInstance['wave_one_bracha_values'][0],messages_to_change,dir_to_change_to))
 		
-			messages_actually_changed = 0
+			messages_actually_changed = []
 			#now actually change all those held messages
 			for thisMessage in thisInstance['held_messages']['wave1_wait']:
 				#log("Deciding whether to change message from {} with value {}.".format(thisMessage['sender'],thisMessage['body'][2][0]))
@@ -470,11 +526,13 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 					messages_to_change -= 1
 					altered_message, changed = maybe_change_bracha_message(thisMessage, dir_to_change_to)
 					if changed:
-						messages_actually_changed += 1
+						messages_actually_changed.append(thisMessage['sender'])
 						
 					return_value_message(altered_message)
 		
-			log("Was able to alter {} messages.".format(messages_actually_changed))
+			setup_quotas(thisIteration['gameplan'], thisInstance['held_messages']['wave1_wait'], target_value, messages_actually_changed, values_target, values_nontarget)
+		
+			log("Was able to alter {} messages.".format(len(messages_actually_changed)))
 			
 	elif wave == 2:
 		if thisInstance['gameplan'] == 'force_decide':
@@ -581,8 +639,9 @@ def process_bracha_message_timing(message,thisInstance):#rbid,thisInstance):
 	
 	if wave == 3:
 		deciding = message['body'][2][1]
-		
-	if thisInstance['timing_quotas'][wave] is None:
+	
+
+	if thisInstance['timing_quotas'] is None or thisInstance['timing_quotas'][wave] is None:
 		#no quota - return
 		log("Returning message - no quota.")
 		return_timing_message(message)
@@ -590,6 +649,7 @@ def process_bracha_message_timing(message,thisInstance):#rbid,thisInstance):
 	elif message['meta']['rbid'][0] == message['sender']:
 		log("Returning message - self messages travel free.")
 		return_timing_message(message)
+		
 	else:
 		try:
 			quota = thisInstance['timing_quotas'][wave][sender]
@@ -746,7 +806,7 @@ def process_message_special(message):
 			
 			thisInstance['iteration']['bracha']['value'] += 1 #update iteration		
 			thisInstance['iteration']['bracha']['timing'] += 1
-			instances[byzID]['timing_quotas'] = setup_quotas(instances[byzID]['gameplan'], node_list, target_value) #reset timing quotas
+			instances[byzID]['timing_quotas'] = None #setup_quotas(instances[byzID]['gameplan'], node_list, target_value) #reset timing quotas
 			release_messages(thisInstance, 'future_iter') #messages held for a future iteration will be reprocessed now.
 
 

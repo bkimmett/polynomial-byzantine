@@ -29,7 +29,7 @@ def init(username, msgtype):
 	__global_exchange = Exchange('broadcast', type='fanout', durable=False, delivery_mode=1) #the 1 means messages are cleared if the server is restarted. For testing purposes.
 	__global_exchange.maybe_bind(__connection) #this should prevent the same exchange from being bound twice by multiple nodes. I think.
 	__producer = __connection.Producer(__connection)
-	__my_queue = Queue(username+'-q', exchange=__global_exchange, routing_key=username+'-q')
+	__my_queue = Queue(username+'-q', exchange=__global_exchange, routing_key=username+'-q', durable=False) #set durable=True at your peril, 'k? This code has no functionality for deleting a queue when the setup is shut down.
 	__my_queue = __my_queue(__connection)
 	__my_queue.declare()
 	#print "Q:"

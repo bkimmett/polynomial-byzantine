@@ -260,6 +260,7 @@ class ReliableBroadcast: # pylint: disable=no-init
 	def checkRbroadcastEcho(thisClass,data,rbid,uid):
 		
 		#TODO: A concern - (num_nodes + fault_bound) / 2 on a noninteger fault_bound?
+		#It'll be fine because of >=.
 		
 		#BROADCAST FORMAT:
 		#MessageHandler.sendAll(message,{'phase':RBPhase.initial,'rbid':(username,message_counter,extraMeta)})

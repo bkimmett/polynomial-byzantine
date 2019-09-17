@@ -614,6 +614,11 @@ class ByzantineAgreement:
 		elif wave == 3:
 			#wave 3 messages are more straightforward to validate - more than half of the nodes have to have settled to a pattern. This is quite unequivocal. 
 			if not msgDecide:
+				if self.brachabits[rbid[0]][2] == None: #previous message wasn't read at all
+					self.log("Holding uncertain non-deciding wave 3 bracha message from {}, waiting for the associated wave 2 message.".format(rbid[0],msgValue))
+					self.holdForLaterWaveSpecial(message,rbid[0])
+					return
+			
 				if msgValue != self.brachabits[rbid[0]][2] or self.brachaMsgCtrTotal[1][1 if msgValue else 0] >= self.num_nodes // 2 + self.fault_bound + 1:
 					#basically, if 'decide' is false, two things must be true:
 					#1. The node must have the same value as its Wave 2 message.
@@ -686,6 +691,7 @@ class ByzantineAgreement:
 					#check wave messages if we got a wave 1 message, which might release held wave 2 messages
 					
 				if wave	== 2:
+					self.checkHeldWaveMessagesSpecial(rbid[0]) #we validated a wave 2 message, so make sure the wave 3 message didn't just happen to be waiting the whole time
 					self.checkHeldWaveMessages(3)
 					#check wave messages - happens after potential wave update to ensure quasi-atomicity
 				
@@ -782,7 +788,7 @@ class ByzantineAgreement:
 				return
 		
 			if message_i < 0 or message_i >= self.num_nodes: ###is this the right message_i max?
-				self.log("Invalid coinflip message from {} via {}, impossible round# {}.".format(rbid[0], message['sender'],message_i+1))
+				self.log("Invalid coinflip message from {} via {}, impossible round# {}.".format(rbid[0], message['sender'],message_i))
 				return
 		
 			if message_j not in self.nodes:
@@ -807,7 +813,7 @@ class ByzantineAgreement:
 				this_coinboard = self.coinboard
 			
 			if not self.ensureCoinboardPosExists(this_coinboard, message_i, message_j):
-				self.log("Couldn't accept {}'s coin flip message - impossible round (i) number: {}.".format(rbid[0],message_i+1))
+				self.log("Couldn't accept {}'s coin flip message - impossible round (i) number: {}.".format(rbid[0],message_i))
 				return
 			
 			#replaced with ensureCoinboardPosExists	
@@ -855,15 +861,15 @@ class ByzantineAgreement:
 			
 			if mode == MessageMode.coin_ack:
 				if rbid[0] in this_coinboard[message_i][message_j][1]:
-					self.log("Received duplicate acknowledgement from {} for coin flip #{} of node {}. (Sender: {})".format(rbid[0], message_i+1, message_j,message['sender']))
+					self.log("Received duplicate acknowledgement from {} for coin flip #{} of node {}. (Sender: {})".format(rbid[0], message_i, message_j,message['sender']))
 					#duplicates CAN happen! This prevents any shenanigans from going on.
 					return
 				
 				this_coinboard[message_i][message_j][1].add(rbid[0]) #sender of broadcast
-				self.log("Received acknowledgement from {} for coin flip #{} of node {}. (Sender: {})".format(rbid[0], message_i+1, message_j,message['sender']))
+				self.log("Received acknowledgement from {} for coin flip #{} of node {}. (Sender: {})".format(rbid[0], message_i, message_j,message['sender']))
 				#Check number of acknowledgements.
 				if len(this_coinboard[message_i][message_j][1]) == self.num_nodes-self.fault_bound:
-					self.log("Got enough acknowledgements for coin flip #{} of node {}.".format(message_i+1, message_j))
+					self.log("Got enough acknowledgements for coin flip #{} of node {}.".format(message_i, message_j))
 					#we've hit the boundary number of acknowledgements! (n-t)
 					#we trigger this only once - it does things like continue the state.				
 					#we also (if we're in Stage 1) need to check for the number of acknowledgements - if we get enough columns, we move on to stage 2. (If we're in Stage 0, we store that we're ready to move on until Stage 1...)
@@ -894,7 +900,7 @@ class ByzantineAgreement:
 								self.log("SERIOUS ERROR: OK, so we just received the correct number of acknowledgements for one of our {} coin flips, and not the one we just broadcast (currently {} vs {} received). This SHOULD be completely impossible without time travel, glitch, or forgery on a grand scale. ".format("earlier" if message_i < self.lastCoinBroadcast else "later", self.lastCoinBroadcast, message_i))
 								#TODO: But do we DO anything about it?
 							else:
-								self.log("Got enough acknowledgements for our own coin flip #{}.".format(message_i+1))
+								self.log("Got enough acknowledgements for our own coin flip #{}.".format(message_i))
 								self.lastCoinBroadcast += 1
 								if self.lastCoinBroadcast < self.num_nodes:
 									coin = self._broadcastCoin(self.lastCoinBroadcast)
@@ -911,7 +917,7 @@ class ByzantineAgreement:
 					else:
 						#if we reach the set number for someone else's flip, release reliable broadcast for the next in the series, if it exists.
 						#we do this EVEN IN THE CASE OF IT BEING IN THE PAST.
-						self.checkHeldCoinFlipMessages(message_i, message_j, searchEpoch=epoch, searchIteration=iteration)
+						self.checkHeldCoinFlipMessages(message_i+1, message_j, searchEpoch=epoch, searchIteration=iteration)
 					
 				
 				#a question: do we always broadcast next flip FIRST or check for while loop first?
@@ -1134,6 +1140,15 @@ class ByzantineAgreement:
 			self.heldMessages['iteration'][target_iter] = blist()
 		self.heldMessages['iteration'][target_iter].append(message)
 	
+	
+	def holdForLaterWaveSpecial(self, message, sender):
+		#this is for holding wave 3 messages, that are not deciding messages, whose values can't be determined because their wave 2 values haven't come in yet. 
+		if sender in self.heldMessages['wave3_special']:
+			self.log("Problem: More than one wave 3 special hold message arrived from the same node. This shouldn't happen (messages either weren't deduplicated or the node is doing something stupid).")
+		else:
+			self.heldMessages['wave3_special'][sender] = []
+		self.heldMessages['wave3_special'][sender].append(message)
+	
 	def holdForLaterWave(self, message, wave, msgValue): #number_messages_needed):
 		#new ver just recalculates the number of messages needed at time and releases all.
 		#saving a message until later. Fish saved messages out with checkHeldWaveMessages.
@@ -1282,6 +1297,13 @@ class ByzantineAgreement:
 		
 		del self.heldMessages['coin_iteration_accepted'][target_iter]
 	
+	def checkHeldWaveMessagesSpecial(self, sender):
+		if sender in self.heldMessages['wave3_special']:
+			for message in self.heldMessages['wave3_special'][sender]:
+				#messages won't be returned to the wave 3 special hold bucket if this fn is triggered.
+				self.validateCoinMsg(message)
+			del self.heldMessages['wave3_special'][sender]
+	
 	def checkHeldWaveMessages(self, wave):
 		#remember, it's '[1 if msgValue else 0]
 		#so [F,T] is the format of messages_found
@@ -1346,6 +1368,9 @@ class ByzantineAgreement:
 		if (target_i,target_j) not in self.heldMessages['coin_flip'][(searchEpoch,searchIteration)]:
 			return
 			
+		if len(self.heldMessages['coin_flip'][(searchEpoch,searchIteration)][(target_i,target_j)]) > 0:
+			self.log("Releasing held coin flip messages for {} round {}.".format(target_j,target_i))	
+			
 		for message in self.heldMessages['coin_flip'][(searchEpoch,searchIteration)][(target_i,target_j)]:
 			ReliableBroadcast.handleRBroadcast(message,checkCoinboardMessages=False)
 		
@@ -1383,6 +1408,7 @@ class ByzantineAgreement:
 	def clearHeldWaveMessages(self):
 		#called on new iteration. 
 		self.heldMessages['wave'] = {2:[[],[]], 3:[[],[]]}
+		self.heldMessages['wave3_special'] = {}
 		
 	#coinboard flip messages, and by extension, coinboard epoch/iteration messages, are NEVER cleared (the latter because flip and list messages are stored together in the epoch/iter buckets and we'd want to keep the flip messages). Even if a new iteration starts, old flips will be written into the coinboard to help along anyone else who comes calling.
 	
@@ -1443,7 +1469,12 @@ class ByzantineAgreement:
 		#find maximum number of decider messages. Is it 0 or 1 that takes the crown?
 		num_deciding_messages = max(self.brachaMsgCtrGoodDeciding)
 		deciding_value = self.brachaMsgCtrGoodDeciding.index(num_deciding_messages)
-		deciding_equal = (self.brachaMsgCtrGoodDeciding[0] == self.brachaMsgCtrGoodDeciding[1])
+		if self.brachaMsgCtrGoodDeciding[1-deciding_value] > 0:
+			self.log("Warning: We have {} deciding messages on the side of {} - and {} on the side of {}. This can only happen with adversarial interference.".format(num_deciding_messages,True if deciding_value == 1 else False,self.brachaMsgCtrGoodDeciding[1-deciding_value],False if deciding_value == 1 else True))
+			#by default, only one of the two values can be deciding. so if we get a majority of deciding messages from one side and the other has SOME, then that indicates tampering.
+		
+		
+		#deciding_equal = (self.brachaMsgCtrGoodDeciding[0] == self.brachaMsgCtrGoodDeciding[1])
 	
 		if num_deciding_messages >= self.num_nodes - self.fault_bound:
 			self._decide(True if deciding_value == 1 else False)
@@ -1453,10 +1484,12 @@ class ByzantineAgreement:
 			#globalCoin doesn't return immediately, so we can't use its return value - nor can be start the new iteration right away. What we do instead is set up a flag so that the value is set to be captured from globalCoin... or not.
 			self.useCoinValue = False
 			
-			if not deciding_equal:
-				self.value = ((True,) if deciding_value == 1 else (False,))
-			else:
-				self.value = (self.value[0],) #tie result, value carries over, decide flag doesn't
+			#if not deciding_equal:
+			self.value = ((True,) if deciding_value == 1 else (False,)) #use the value in the majority of deciding messages, NOT the value the node previously had.
+			#else:
+			#	self.value = (self.value[0],) #tie result, value carries over, decide flag doesn't
+			
+			#these cut lines of code above were cut because the correct response to deciding messages from both directions is to warn, not to handle it silently
 				
 			#set the new value IMMEDIATELY. Not after global-coin runs. Global-Coin takes a while, and we might get more stuff in since then, but it could screw Bracha up.
 			
@@ -1688,13 +1721,13 @@ class ByzantineAgreement:
 						if self.ensureCoinboardPosExists(self.pastCoinboards[(messageEpoch,messageIteration)], message_i-1, messageOrigSender):
 							acks_count = len(self.pastCoinboards[(messageEpoch,messageIteration)][message_i-1][messageOrigSender][1])
 						else:
-							self.log("Couldn't accept {}'s coin flip message - impossible round (i) number for previous round: {}.".format(rbid[0],message_i))
+							self.log("Couldn't accept {}'s coin flip message - impossible round (i) number for previous round: {}.".format(messageOrigSender,message_i))
 							return False
 					else:
 						if self.ensureCoinboardPosExists(self.coinboard, message_i-1, messageOrigSender):
 							acks_count = len(self.coinboard[message_i-1][messageOrigSender][1])
 						else:
-							self.log("Couldn't accept {}'s coin flip message - impossible round (i) number for previous round: {}.".format(rbid[0],message_i))
+							self.log("Couldn't accept {}'s coin flip message - impossible round (i) number for previous round: {}.".format(messageOrigSender,message_i))
 							return False
 				except Exception as err:
 					print err 
@@ -1705,6 +1738,7 @@ class ByzantineAgreement:
 					#let it go through
 					return True
 				else: 
+					self.log("Holding {}'s coin flip message #{} - waiting for acknowledgements for previous message.".format(messageOrigSender, message_i))
 					self.holdCoinForSufficientAcks(message,message_i,message_j)
 					return False
 		elif messageCoinMode == MessageMode.coin_list:	
@@ -1730,6 +1764,7 @@ class ByzantineAgreement:
 					self.log("Error processing coin list from {}.".format(messageOrigSender))
 					return False
 				if not result:
+					self.log("Holding coin list from {} for later - differences are {}.".format(messageOrigSender,differences))
 					self.holdCoinListForLater(message,differences)
 				return result #passed? T/F
 			except Exception as err:

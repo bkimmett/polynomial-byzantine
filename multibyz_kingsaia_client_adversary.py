@@ -128,6 +128,7 @@ def main(args):
 							print "Couldn't send to adversary - it looks like you're not using an adversarial setup."
 						#send format: message, meta, dest
 					elif command == "adv_release":
+						#TODO: Do for epoch and iteration.
 						byzID, wave, leftovers = split(message2+" ", " ", 2)
 						try:
 							MessageHandler.sendToAdversary((byzID,int(wave)),{'mode':'release'})
