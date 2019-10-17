@@ -20,6 +20,7 @@ from blist import blist 		#containers that offer better performance when they ge
 #debug logging
 
 debug_rb = False
+debug_rb_coin = False
 debug_rb_accept = False
 debug_byz = True
 
@@ -107,6 +108,12 @@ class ReliableBroadcast: # pylint: disable=no-init
 			print "[{}:{}] {}".format(strftime("%H:%M:%S"),username,message)
 			stdout.flush() #force write
 	
+	@classmethod
+	def logCoin(thisClass,message):
+		if debug_rb_coin:
+			global username
+			print "[{}:{}] {}".format(strftime("%H:%M:%S"),username,message)
+			stdout.flush() #force write
 		
 	
 	@classmethod
@@ -191,10 +198,15 @@ class ReliableBroadcast: # pylint: disable=no-init
 			
 		###try:
 		if is_byzantine_related and checkCoinboardMessages and (data[0] == MessageMode.coin_flip or data[0] == MessageMode.coin_list):
+			if data[0] == MessageMode.coin_list:
+				thisClass.logCoin("Received coin list RB message from {}. Phase: {}.".format(rbid[0],phase))
 			instance = ByzantineAgreement.getInstance(rbid[2][0]) #rbid[2][0] = extraMeta[0] = byzID
 			if not instance.checkCoinboardMessageHolding(message):
+				if data[0] == MessageMode.coin_list:
+					thisClass.logCoin("Held by checkCoinboardMessageHolding.")
 				return None#if held, stop processing for now
-					
+			if data[0] == MessageMode.coin_list:
+				thisClass.logCoin("Good to go!")		
 					
 					
 				#coinboard message - possibly hold for later!
@@ -382,6 +394,10 @@ class ByzantineAgreement:
 		self.maxIterations = iterConst * len(self.nodes)
 		self.maxEpochs = epochConst * len(self.nodes) 
 		
+		self.corrupted = False
+		self.bracha_gameplan = None
+		self.coin_gameplan = None
+		
 		self._reset() #sets up rewindable parts of agreement attempt.
 		
 		self.setInstance() #TODO: Yeah, is this gonna work?
@@ -497,9 +513,13 @@ class ByzantineAgreement:
 		#these keep track of which coinboards we've received in this epoch/iteration pair. 
 		
 		
+		if self.corrupted and self.bracha_gameplan is not None and self.bracha_gameplan[0] is not None:
+			self.value[0] = self.bracha_gameplan[0] #pawn of the adversary says what?
+		
+		
 		#aka Bracha Wave 1
-	
-		ReliableBroadcast.broadcast((MessageMode.bracha, 1, self.value),extraMeta=(self.ID,self.epoch,self.iteration))
+		if not self.corrupted or self.bracha_gameplan is not None: #if the entire gameplan is none, don't broadcast at all.
+			ReliableBroadcast.broadcast((MessageMode.bracha, 1, self.value),extraMeta=(self.ID,self.epoch,self.iteration))
 		#also, count myself (free).
 		self.brachabits[username][1] = self.value[0]
 		#if self.brachabits[username][0]: #if we're a good node:
@@ -590,8 +610,8 @@ class ByzantineAgreement:
 		
 		#validating time! 
 		
-		if wave == 1:
-			#wave 1 messages are always valid.
+		if wave == 1 or self.corrupted:
+			#wave 1 messages are always valid. #if we are corrupted by the adversary, skip validation.
 			pass
 		elif wave == 2:
 			if self.brachaMsgCtrTotal[0][1 if msgValue else 0] < self.initial_validation_bound:
@@ -649,15 +669,25 @@ class ByzantineAgreement:
 		#TODO: Switch check vs self.nodes to up here instead of relying on a try. Keep the try anyway.
 		
 		try:
-			if self.brachabits[rbid[0]][wave] is not None:
+			if not self.corrupted and self.brachabits[rbid[0]][wave] is not None:
 				if msgValue != self.brachabits[rbid[0]][wave]:
 					#wut-oh. In this case, there was a mismatch between a previous message we received and a current message - in the same wave. As in, that was already sent. This is indicative of a faulty node and earns the node a spot on the blackList.
 					self.log("Received the same message with different values from node {}. This smells! Blacklisting.".format(rbid[0]))
 					self.log("Expected {} of type {}, got {} of type {}".format(self.brachabits[rbid[0]][wave], type(self.brachabits[rbid[0]][wave]), msgValue, type(msgValue)))
 					self.blacklistNode(rbid[0]) #remember, a reliable broadcast sender (rbid[0]) can't be forged because it has to match the initial sender of the message, and THAT can't be forged. This property has to hold for this to work.
-					
+						
+							
 				#you'll note there's the end of this if block. If there's a duplicate message, we do nothing; we recorded it already.	
 			else:
+				if self.corrupted and self.brachabits[rbid[0]][wave] is not None:
+					#corrupted - unwind current received record so we can replace it with the incoming message
+					msgOldValue = self.brachabits[rbid[0]][wave]
+					self.brachaMsgCtrGood[wave-1][1 if msgOldValue else 0] -= 1
+					if wave == 3 and msgDecide: #if they're deciding, record it as a deciding message
+						self.brachaMsgCtrGoodDeciding[1 if msgOldValue else 0] -= 1
+		
+					self.brachaMsgCtrTotal[wave-1][1 if msgOldValue else 0] -= 1 	
+			
 				self.brachabits[rbid[0]][wave] = msgValue
 				#TODO: 'Good' was originally only supposed to apply to Global-Coin, not bracha. Are we supposed to count separately here?
 				#if self.brachabits[rbid[0]][0]: #that is, if the node is deemed Good
@@ -939,6 +969,7 @@ class ByzantineAgreement:
 				#TODO: build better exception handler.
 			
 			if rbid[0] in self.whitelistedCoinboardList:
+				self.log("Received duplicate coin list from {}: {}.".format(rbid[0],coin_list))
 				return
 				#duplicate coin list - we can skip this as it's already been validated.
 			
@@ -957,21 +988,27 @@ class ByzantineAgreement:
 
 			
 			if list_looks_OK:
+				self.log("Received coin list from {}: {}.".format(rbid[0],coin_list))
 				self.whitelistedCoinboardList.add(rbid[0]) #sender node name
 			
 				if len(self.whitelistedCoinboardList) == self.num_nodes-self.fault_bound: 
 					if self.coinState == 2:
+						self.log("And we are done! About to finalize coinboard.")
 						#OK, it's go time! Move to stage 3.
 						self.coinState = 3
 						self._finalizeCoinboard()
 					else: 
+						self.log("Precess 2 is set; coinboard will go straight to stage 3 (done) when it hits stage 2.")
 						self.precessCoinII = True
 			else:
 				if list_looks_OK == False:
+					self.log("Holding coin list from {} for later: {}.".format(rbid[0],coin_list))
 				#TODO: list_looks_OK will be None if there was an error. Handle this error.
 					self.holdCoinListForLater(message, coin_list) #TODO: Will this ever trigger? Surely the checkCoinboardHolding will catch it first, right?
 					return
 				#hold list for later
+				else: 
+					self.log("Some sort of error processing coin list from {}: {}.".format(rbid[0],coin_list))
 			
 		else:
 			self.log("Throwing out bracha or some other type of noncoin message from {} via {}.".format(rbid[0], message['sender']))
@@ -1091,6 +1128,8 @@ class ByzantineAgreement:
 		
 		#store coinboard in past coinboards here.
 		self.pastCoinboards[(self.epoch,self.iteration)] = self.coinboard
+		#if self.epoch not in self.pastCoinboardLogs:
+		self.pastCoinboardLogs[self.epoch] = [{},{}]
 		self.pastCoinboardLogs[self.epoch][0] = self.coinboardLogs
 		self.pastCoinboardLogs[self.epoch][1] = deepcopy(self.coinboardLogs) #this copy will be updated if messages-from-the-past come in, and we don't want it to also update the original copy by accident.
 
@@ -1217,7 +1256,8 @@ class ByzantineAgreement:
 				
 			return False, stuff_to_fulfill
 				
-		except (ValueError, KeyError, IndexError):
+		except (ValueError, KeyError, IndexError) as e:
+			print e
 			return None, None		
 		
 		
@@ -1379,16 +1419,26 @@ class ByzantineAgreement:
 		
 	def checkHeldCoinListMessages(self,accepted_flip_i, accepted_flip_j):
 		#this releases held coin list messages given that the i and j have just been received here. 
+		if len(self.heldMessages['coin_list']) > 0:
+			self.log("Clearing held coin list items for this message.")
+		
+		messages_decremented = 0
+		new_block_lengths = []
+		
 		for messageID in range(len(self.heldMessages['coin_list']) - 1,-1,-1): #list indices from n to 0 in reverse order
-			thisMessage = self.heldMessages['coin_list'][messageID]
-			if accepted_flip_j in thisMessage[0]: #[0] is the message block's dict of stuff to do. [1] would be the actual message.
+			#thisMessage = self.heldMessages['coin_list'][messageID]
+			if accepted_flip_j in self.heldMessages['coin_list'][messageID][0]: #[0] is the message block's dict of stuff to do. [1] would be the actual message.
 				if accepted_flip_i >= thisMessage[0][accepted_flip_j]:
-					del thisMessage[0][accepted_flip_j]
-					if len(thisMessage[0]) == 0:
+					del self.heldMessages['coin_list'][messageID][0][accepted_flip_j]
+					messages_decremented += 1
+					new_block_lengths.append(len(self.heldMessages['coin_list'][messageID][0]))
+					if len(self.heldMessages['coin_list'][messageID][0]) == 0:
 						del self.heldMessages['coin_list'][messageID]
 						ReliableBroadcast.handleRBroadcast(thisMessage[1], checkCoinboardMessages=False) #send the message back out and process it
 						#TODO: For efficiency, this should probably be here under the check that we cleared something. But what if a {} (ready to go) list ends up here? It'll never be released. Fix this... maybe check when storing?
-				
+		
+		if len(self.heldMessages['coin_list']) > 0:
+			self.log("{} messages decremented. New block lengths: {}".format(messages_decremented, new_block_lengths))
 		
 	def clearHeldEpochMessages(self):
 		#called on reset. Removes only epochs that are previous to the current epoch.
@@ -1424,11 +1474,15 @@ class ByzantineAgreement:
 		if self.brachaMsgCtrGood[0][0] < self.brachaMsgCtrGood[0][1]:
 			self.value = (True,)
 			
+		if self.corrupted and self.bracha_gameplan is not None and self.bracha_gameplan[1] is not None:
+			self.value[0] = self.bracha_gameplan[1] #pawn of the adversary says what?
+				
 		self.log("Moving to Bracha Wave 2: value is now {}".format(self.value[0]))	
 		#if they are equal, we stay where we are.
 		
 		#Bracha Wave 2
-		ReliableBroadcast.broadcast((MessageMode.bracha, 2, self.value),extraMeta=(self.ID,self.epoch,self.iteration))
+		if not self.corrupted or self.bracha_gameplan is not None: #if the entire gameplan is none, don't broadcast at all.
+			ReliableBroadcast.broadcast((MessageMode.bracha, 2, self.value),extraMeta=(self.ID,self.epoch,self.iteration))
 		#also, count myself (free).
 		self.brachabits[username][2] = self.value[0]
 		
@@ -1447,10 +1501,15 @@ class ByzantineAgreement:
 		else:
 			self.value = (self.value[0],False) #no decide
 			
+		if self.corrupted and self.bracha_gameplan is not None and self.bracha_gameplan[2] is not None:
+			self.value = self.bracha_gameplan[2] #pawn of the adversary says what?
+			#note that this one should be a two-item tuple - the adversary specifies the deciding flag, too.
+			
 		self.log("Moving to Bracha Wave 3: value is now {}, {}deciding".format(self.value[0],'' if self.value[1] else 'not '))
 		
 		#Bracha Wave 3
-		ReliableBroadcast.broadcast((MessageMode.bracha, 3, self.value),extraMeta=(self.ID,self.epoch,self.iteration))
+		if not self.corrupted or self.bracha_gameplan is not None: #if the entire gameplan is none, don't broadcast at all.
+			ReliableBroadcast.broadcast((MessageMode.bracha, 3, self.value),extraMeta=(self.ID,self.epoch,self.iteration))
 		#also, count myself (free).
 		self.brachabits[username][3] = self.value[0]
 
@@ -1824,7 +1883,7 @@ def main(args):
 			if msgModeTemp == MessageMode.bracha:
 				thisInstance.validateBrachaMsg(adv_message)
 				#TODO call bracha message verify function
-			elif msgModeTemp == MessageMode.coin_flip or msgModeTemp == MessageMode.coin_flip or msgModeTemp == MessageMode.coin_ack:
+			elif msgModeTemp == MessageMode.coin_flip or msgModeTemp == MessageMode.coin_list or msgModeTemp == MessageMode.coin_ack:
 				thisInstance.validateCoinMsg(adv_message)
 		
 		#now check for regular messages
@@ -1904,6 +1963,21 @@ def main(args):
 				else:
 					print "Unknown node message received."
 					print repr(message) #TODO: throw error on junk message. Or just drop it.
+			elif message['type'] == "adversary_command":
+				#adversarial override - TO DO
+				if message['body'][0] == "gameplan":
+					thisInstance = ByzantineAgreement.getInstance(message['body'][1])
+					thisInstance.corrupted = True #Having a gameplan also bypasses certain message validation sequences. This is determined by this flag.
+					thisInstance.bracha_gameplan = message['body'][2]
+					thisInstance._startBracha() #start over with wave 1 message; adversary will toss not-yet-corrupted messages
+					#gameplan format for corrupted nodes:
+					#[0]: "gameplan"
+					#[1]: Byzantine ID the node is corrupted for.
+					#[2]: Bracha values. List of three values, the last including the deciding flag. Ex. [True, False, (False,True)]. If any value in the list is None, the node just acts natural. If the entire list is None, the node refuses to participate in bracha.
+					#[3]: Coin values. Ignored for now.
+					
+					
+				pass
 			elif message['type'] == "decide":
 				#someone's deciding - IGNORE
 				pass

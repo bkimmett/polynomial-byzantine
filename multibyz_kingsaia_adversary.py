@@ -110,8 +110,11 @@ def setup_or_get_EI(thisInstance, epoch, iteration):
 	return thisInstance['ei_storage'][epoch][iteration]
 
 	
-def setup_quotas(gameplan, node_message_list, target_value, corrupted_nodes, target_count, nontarget_count):
+def setup_quotas(gameplan, node_message_list, target_value, corrupted_nodes, corruption_dir,  wave1_values): #target_count, nontarget_count):
 	quota_list = [None,None,None,None]
+	target_count = wave1_values[1 if target_value else 0]
+	nontarget_count = wave1_values[0 if target_value else 1]
+	
 	
 	if gameplan is None:
 		return quota_list
@@ -130,6 +133,7 @@ def setup_quotas(gameplan, node_message_list, target_value, corrupted_nodes, tar
 		quota_list[1] = {}
 		for node in node_list: 
 			quota_list[1][node[0]] = [minority_bound,num_nodes] if target_value else [num_nodes,minority_bound]
+			quota_list[1][node[0]][1 if node[1] else 0]	-= 1 #decrement the node's quota by 1 for its original self message.
 		print repr(quota_list[1])
 		return quota_list
 		
@@ -143,14 +147,12 @@ def setup_quotas(gameplan, node_message_list, target_value, corrupted_nodes, tar
 			majority = target_value
 		else:
 			majority = not target_value
-	
-			
 		
 		for node in node_list: 
 			quota_list[2][node[0]] = [num_nodes // 2, num_nodes // 2] #we won't get more than n/2 wave 2 messages of either type, so the deciding flag is never set
 			
 			if node[0] in corrupted_nodes:
-				quota_list[1][node[0]] = [minority_bound,num_nodes] if majority else [num_nodes,minority_bound] #set quota so node receives majority value
+				quota_list[1][node[0]] = [minority_bound,num_nodes] if majority else [num_nodes,minority_bound] #set quota so node receives majority value				
 			elif force_minority_counter > 0:
 				quota_list[1][node[0]] = [minority_bound,num_nodes] if not majority else [num_nodes,minority_bound] #set quota so that node receives minority value - to counterbalance majority value going to corrupted nodes
 				force_minority_counter -= 1
@@ -158,6 +160,9 @@ def setup_quotas(gameplan, node_message_list, target_value, corrupted_nodes, tar
 				#distribute nodes evenly
 				quota_list[1][node[0]] = [minority_bound,num_nodes] if flip else [num_nodes,minority_bound] #true flip yields 'True' wave 2 message - false flip yields 'False' wave 2 message - this ensures the wave 2 messages are split half and have and the wave 2 quota works
 				flip  = not flip
+				
+			quota_list[1][node[0]][1 if node[1] else 0]	-= 1 #decrement the node's quota by 1 for its original self message.
+		print repr(quota_list[1])
 		return quota_list	
 		
 	if gameplan == "split_hold":
@@ -426,15 +431,17 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 		return 
 	
 	#When receiving a message, whether we change it or not, alter the node's personal quota to reduce it by one for its original value. This prevents jams where the node can decide inconsistently - the node pre-receives its own message, so we alter the quota to accommodate it. Self-sent messages then travel for free, ignoring quota. (We could always not let them through, with an indefinite hold - in case we're worried about nodes catching on that their value has been altered. But it's easier to just let the messages through for now.)
-	# A CONCERN: Sooner or later some node will get its quota decremented late 'cause it sent out its value very late, AFTER all the messages have come in and made it decide in a way the adversary didn't want. There's no good way to handle this while maintaining full async. The adversary could also hold off on letting the node receive messages for a wave until it's sent its own value, but this is an advanced enough scenario that if it goes wrong we can just rerun the tests again.
+	# A FORMER CONCERN: Sooner or later some node will get its quota decremented late 'cause it sent out its value very late, AFTER all the messages have come in and made it decide in a way the adversary didn't want. There's no good way to handle this while maintaining full async. The adversary could also hold off on letting the node receive messages for a wave until it's sent its own value, but this is an advanced enough scenario that if it goes wrong we can just rerun the tests again.
 	#
 	#...making an adversary is hard. Also, old man Bracha was a genius. 
 	
-	if thisInstance['timing_quotas'] is not None:
-		if thisInstance['timing_quotas'][wave] is not None:
-			if thisInstance['timing_quotas'][wave][message['sender']] is not None:
-				if thisInstance['timing_quotas'][wave][message['sender']][1 if message['body'][2][0] else 0] > 0:
-					thisInstance['timing_quotas'][wave][message['sender']][1 if message['body'][2][0] else 0] -= 1
+	#PS: The above concern was resolved by having the quota setup take place after wave 1 values are known, and wave 2/3 values can be predicted. 
+	
+	# if thisInstance['timing_quotas'] is not None:
+# 		if thisInstance['timing_quotas'][wave] is not None:
+# 			if thisInstance['timing_quotas'][wave][message['sender']] is not None:
+# 				if thisInstance['timing_quotas'][wave][message['sender']][1 if message['body'][2][0] else 0] > 0:
+# 					thisInstance['timing_quotas'][wave][message['sender']][1 if message['body'][2][0] else 0] -= 1
 	
 	if thisInstance['gameplan'] == 'shaker' or thisInstance['gameplan'] == None:
 		log("Returning message - no changes with this gameplan.")
@@ -530,7 +537,7 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 						
 					return_value_message(altered_message)
 		
-			setup_quotas(thisIteration['gameplan'], thisInstance['held_messages']['wave1_wait'], target_value, messages_actually_changed, values_target, values_nontarget)
+			thisInstance['timing_quotas'] = setup_quotas(thisInstance['gameplan'], thisInstance['held_messages']['wave1_wait'], thisInstance['target_value'], messages_actually_changed, dir_to_change_to, thisInstance['wave_one_bracha_values'])
 		
 			log("Was able to alter {} messages.".format(len(messages_actually_changed)))
 			
