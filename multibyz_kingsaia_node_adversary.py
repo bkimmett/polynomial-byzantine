@@ -1502,7 +1502,16 @@ class ByzantineAgreement:
 			self.value = (self.value[0],False) #no decide
 			
 		if self.corrupted and self.bracha_gameplan is not None and self.bracha_gameplan[2] is not None:
-			self.value = self.bracha_gameplan[2] #pawn of the adversary says what?
+			if None in self.bracha_gameplan[2]: #partial overwrite
+				self.protovalue = []
+				for index, thisvalue in enumerate(self.bracha_gameplan[2]):
+					if thisvalue is not None:
+						self.protovalue.append(thisvalue)
+					else:
+						self.protovalue.append(self.value[index])
+				self.value = tuple(self.protovalue)
+			else:
+				self.value = self.bracha_gameplan[2] #pawn of the adversary says what?
 			#note that this one should be a two-item tuple - the adversary specifies the deciding flag, too.
 			
 		self.log("Moving to Bracha Wave 3: value is now {}, {}deciding".format(self.value[0],'' if self.value[1] else 'not '))
@@ -1969,6 +1978,7 @@ def main(args):
 					thisInstance = ByzantineAgreement.getInstance(message['body'][1])
 					thisInstance.corrupted = True #Having a gameplan also bypasses certain message validation sequences. This is determined by this flag.
 					thisInstance.bracha_gameplan = message['body'][2]
+					#thisInstance.coin_gameplan = message['body'][3] #TODOOOOOOOOO
 					thisInstance._startBracha() #start over with wave 1 message; adversary will toss not-yet-corrupted messages
 					#gameplan format for corrupted nodes:
 					#[0]: "gameplan"

@@ -133,7 +133,8 @@ def setup_quotas(gameplan, node_message_list, target_value, corrupted_nodes, cor
 		quota_list[1] = {}
 		for node in node_list: 
 			quota_list[1][node[0]] = [minority_bound,num_nodes] if target_value else [num_nodes,minority_bound]
-			quota_list[1][node[0]][1 if node[1] else 0]	-= 1 #decrement the node's quota by 1 for its original self message.
+			quota_list[1][node[0]][1 if (corruption_dir if (node[0] in corrupted nodes) else node[1])  else 0]	-= 1 #decrement the node's quota by 1 for its original self message.
+			#the above line originally said "1 if node[1] else 0" and its purpose was to decrement the quota by its original message value, so that when the lie came back to that node and was rejected, everything would line up. We still need to subtract one from the quota, because self messages travel free - but the node is forced to lie, so we decrement the quota by one for the lying message instead.
 		print repr(quota_list[1])
 		return quota_list
 		
@@ -161,7 +162,7 @@ def setup_quotas(gameplan, node_message_list, target_value, corrupted_nodes, cor
 				quota_list[1][node[0]] = [minority_bound,num_nodes] if flip else [num_nodes,minority_bound] #true flip yields 'True' wave 2 message - false flip yields 'False' wave 2 message - this ensures the wave 2 messages are split half and have and the wave 2 quota works
 				flip  = not flip
 				
-			quota_list[1][node[0]][1 if node[1] else 0]	-= 1 #decrement the node's quota by 1 for its original self message.
+			quota_list[1][node[0]][1 if (corruption_dir if (node[0] in corrupted nodes) else node[1]) else 0]	-= 1 #decrement the node's quota by 1 for its self message.
 		print repr(quota_list[1])
 		return quota_list	
 		
@@ -178,7 +179,8 @@ def setup_quotas(gameplan, node_message_list, target_value, corrupted_nodes, cor
 				quota_list[1][node[0]] = [minority_bound,num_nodes] if target_value else [num_nodes,minority_bound] #ensure target value is emitted
 			else:
 				quota_list[1][node[0]] = [num_nodes,minority_bound] if target_value else [minority_bound,num_nodes] #nontarget value is emitted
-			
+				
+			quota_list[1][node[0]][1 if (corruption_dir if (node[0] in corrupted nodes) else node[1]) else 0]	-= 1
 			#post wave 1: (assuming target is TRUE):
 			#2t TRUE2, rest FALSE2
 			#for smaller t's:
@@ -347,7 +349,16 @@ def release_messages(thisInstance, key): #, message_processor):
 	#clear messages
 	
 def node_is_overtaken(instance, nodename):
-	return nodename in instances[instance]['fault_list']		
+	return nodename in instances[instance]['fault_list']	
+	
+def send_node_gameplans(instance, nodename, bracha_plan, coin_plan=None):
+	if not maybe_overtake_node(instance, nodename):
+		return False #we couldn't overtake this node, so no send
+		
+	MessageHandler.send(["gameplan", instance, bracha_plan, coin_plan], None, nodename, type_override='adversary_command')
+	
+	return True 	
+	
 	
 def maybe_overtake_node(instance, nodename):
 	if node_is_overtaken(instance, nodename):
@@ -477,10 +488,19 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 		
 			messages_to_change = 0
 			dir_to_change_to = None
+			gameplan_to_load = [None,None,(None,None)]
 		
 			if thisInstance['gameplan'] == 'split_vote' or thisInstance['gameplan'] == 'split_hold':
 				messages_to_change_to_target = max( (fault_bound+2) - values_target, 0 )
 				messages_to_change_to_nontarget = max( (fault_bound+2) - values_nontarget, 0 )
+				
+				if messages_to_change_to_target > 0 and messages_to_change_to_nontarget == 0:
+					gameplan_to_load = [thisInstance['target_value'], None, None]
+				elif messages_to_change_to_target == 0 and messages_to_change_to_nontarget > 0:
+					gameplan_to_load = [not thisInstance['target_value'], None, None]
+				else:
+					pass #no changes
+				
 				#make sure there's at least t+1 of each for split_vote or split_hold
 				#try to get t+2 if we can tho - this'll allow for nodes that recognize their own message being altered and reject it to still see t+1 of each type
 				#ideally, though, the adversarial nodes should have quotas to expect the majority value, excluding that node's own altered value
@@ -490,12 +510,14 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 			elif thisInstance['gameplan'] == 'force_decide':
 				messages_to_change_to_target = max( (fault_bound+2) - values_target, 0 )
 				messages_to_change_to_nontarget = 0
+				gameplan_to_load = [thisInstance['target_value'],thisInstance['target_value'],(thisInstance['target_value'],True)]
 				#we only need t+1 target for force_decide
 				#but we try to get t+2
 
 			elif thisInstance['gameplan'] == 'lie_like_a_rug':
 				messages_to_change_to_target = min(fault_bound, values_nontarget) 
 				messages_to_change_to_nontarget = 0
+				gameplan_to_load = [thisInstance['target_value'],thisInstance['target_value'],(thisInstance['target_value'],None)]
 				#naive adversary - change as many nodes to target as we can!
 			
 				#this may be the simplest, because it has no timing changes.
@@ -531,9 +553,14 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 					#log("Changing message.")
 					
 					messages_to_change -= 1
-					altered_message, changed = maybe_change_bracha_message(thisMessage, dir_to_change_to)
+					changed = send_node_gameplans(thisInstance['ID'], thisMessage['sender'], gameplan_to_load)
+					#changed = maybe_overtake_node(thisInstance['ID'], thisMessage['sender'])
+					#altered_message, changed = maybe_change_bracha_message(thisMessage, dir_to_change_to)
 					if changed:
 						messages_actually_changed.append(thisMessage['sender'])
+						return #drop message - corrupted node will resend
+						##TODO - VERY IMPORTANT: Right now, the adversary doesn't handle multiple iterations too well. It doesn't make preferential use of nodes it's already corrupted - it's kinda naive. But it should be sufficient. Manipulating bracha... isn't actually that hard if you have at least one good node that starts different from the others, and you're sure no one is looking over your shoulder.
+						
 						
 					return_value_message(altered_message)
 		
@@ -541,55 +568,55 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 		
 			log("Was able to alter {} messages.".format(len(messages_actually_changed)))
 			
-	elif wave == 2:
-		if thisInstance['gameplan'] == 'force_decide':
-			#for force_decide, the overtaken nodes will still emit the original value on wave 2 - this is because they store their natural emitted wave 1 value and reject the altered copy. So, the adversary has to alter their values on wave 2, too.
-			if value != thisInstance['target_value']:
-				altered_message, changed = maybe_change_bracha_message(message, thisInstance['target_value'], skip_nonadversarial=True)
-				if changed:
-					log("Changed message value to {}".format(altered_message['body'][2][0]))
-				log("Returning message.")
-				return_value_message(altered_message)
-			else: 
-				return_value_message(message)
-		elif thisInstance['gameplan'] == 'lie_like_a_rug':
-			#adversary prepares fake message
-			altered_message, changed = maybe_change_bracha_message(message, (False if value else True) if thisInstance['target_value'] is None else thisInstance['target_value'] ) #overwrite message, if possible. if we don't have a target, swap the bit of the message. If we do have a target, set the value to that.
-			if changed:
-				log("Changed message value to {}".format(altered_message['body'][2][0]))
-			log("Returning message.")
-			return_value_message(altered_message)
-		else:
-			#gameplan doesn't affect this
-			log("Returning message.")
-			return_value_message(message)
-				
-	elif wave == 3:
-		deciding = message['body'][2][1] #get deciding flag
-		
-		if thisInstance['gameplan'] == 'force_decide':
-			#for force_decide, the overtaken nodes will still emit the original value on wave 3, too, so we pretend they're deciding with the target value.
-			if value != thisInstance['target_value']:
-				altered_message, changed = maybe_change_bracha_message(message, thisInstance['target_value'], skip_nonadversarial=True)
-				if changed:
-					log("Changed message value to {}".format(altered_message['body'][2][0]))
-					altered_message['body'][2][1] = True #set deciding flag (adversary's lie, or at least adversary's wishful thinking)
-				log("Returning message.")
-				return_value_message(altered_message)
-			else: 
-				return_value_message(message)
-				
-		elif thisInstance['gameplan'] == 'lie_like_a_rug':
-			#adversary prepares fake message
-			altered_message, changed = maybe_change_bracha_message(message, (False if value else True) if thisInstance['target_value'] is None else thisInstance['target_value'] ) #overwrite message, if possible. if we don't have a target, swap the bit of the message. If we do have a target, set the value to that.
-			if changed:
-				log("Changed message value to {}".format(altered_message['body'][2][0]))
-			log("Returning message.")
-			return_value_message(altered_message)
-		else:
-			#gameplan doesn't affect this
-			log("Returning message.")
-			return_value_message(message)
+	# elif wave == 2:
+# 		if thisInstance['gameplan'] == 'force_decide':
+# 			#for force_decide, the overtaken nodes will still emit the original value on wave 2 - this is because they store their natural emitted wave 1 value and reject the altered copy. So, the adversary has to alter their values on wave 2, too.
+# 			if value != thisInstance['target_value']:
+# 				altered_message, changed = maybe_change_bracha_message(message, thisInstance['target_value'], skip_nonadversarial=True)
+# 				if changed:
+# 					log("Changed message value to {}".format(altered_message['body'][2][0]))
+# 				log("Returning message.")
+# 				return_value_message(altered_message)
+# 			else: 
+# 				return_value_message(message)
+# 		elif thisInstance['gameplan'] == 'lie_like_a_rug':
+# 			#adversary prepares fake message
+# 			altered_message, changed = maybe_change_bracha_message(message, (False if value else True) if thisInstance['target_value'] is None else thisInstance['target_value'] ) #overwrite message, if possible. if we don't have a target, swap the bit of the message. If we do have a target, set the value to that.
+# 			if changed:
+# 				log("Changed message value to {}".format(altered_message['body'][2][0]))
+# 			log("Returning message.")
+# 			return_value_message(altered_message)
+# 		else:
+# 			#gameplan doesn't affect this
+# 			log("Returning message.")
+# 			return_value_message(message)
+# 				
+# 	elif wave == 3:
+# 		deciding = message['body'][2][1] #get deciding flag
+# 		
+# 		if thisInstance['gameplan'] == 'force_decide':
+# 			#for force_decide, the overtaken nodes will still emit the original value on wave 3, too, so we pretend they're deciding with the target value.
+# 			if value != thisInstance['target_value']:
+# 				altered_message, changed = maybe_change_bracha_message(message, thisInstance['target_value'], skip_nonadversarial=True)
+# 				if changed:
+# 					log("Changed message value to {}".format(altered_message['body'][2][0]))
+# 					altered_message['body'][2][1] = True #set deciding flag (adversary's lie, or at least adversary's wishful thinking)
+# 				log("Returning message.")
+# 				return_value_message(altered_message)
+# 			else: 
+# 				return_value_message(message)
+# 				
+# 		elif thisInstance['gameplan'] == 'lie_like_a_rug':
+# 			#adversary prepares fake message
+# 			altered_message, changed = maybe_change_bracha_message(message, (False if value else True) if thisInstance['target_value'] is None else thisInstance['target_value'] ) #overwrite message, if possible. if we don't have a target, swap the bit of the message. If we do have a target, set the value to that.
+# 			if changed:
+# 				log("Changed message value to {}".format(altered_message['body'][2][0]))
+# 			log("Returning message.")
+# 			return_value_message(altered_message)
+# 		else:
+# 			#gameplan doesn't affect this
+# 			log("Returning message.")
+# 			return_value_message(message)
 
 
 	#cleanup - if we have later wave value messages, release earlier wave timing messages now	
