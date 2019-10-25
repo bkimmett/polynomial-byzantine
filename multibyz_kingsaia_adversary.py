@@ -641,7 +641,11 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 			log("Was able to alter {} messages.".format(len(messages_actually_changed)))
 	
 	else:
-		return_value_message(message) #message not altered		
+		return_value_message(message) #message not altered	
+		
+	if thisIteration['timing_quotas'] == None:
+		return #there's no need to release messages if we didn't set a quota to hold them in the first place.
+		
 	# elif wave == 2:
 # 		if thisInstance['gameplan'] == 'force_decide':
 # 			#for force_decide, the overtaken nodes will still emit the original value on wave 2 - this is because they store their natural emitted wave 1 value and reject the altered copy. So, the adversary has to alter their values on wave 2, too.

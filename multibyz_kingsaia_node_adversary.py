@@ -1248,7 +1248,7 @@ class ByzantineAgreement:
 					if coin_i <= stuff_to_fulfill[coin_j]:
 						continue #accept the higher of the two values in the duplicate
 				
-				if len(coinboard) < coin_i or coin_j not in self.coinboard[coin_i] or coinboard[coin_i][coin_j][0] is None: #not got to that round yet OR no entry for that node OR no value in that node's entry
+				if len(coinboard) <= coin_i or coin_j not in self.coinboard[coin_i] or coinboard[coin_i][coin_j][0] is None: #not got to that round yet OR no entry for that node OR no value in that node's entry
 					stuff_to_fulfill[coin_j] = coin_i	
 				
 			if len(stuff_to_fulfill) == 0:
