@@ -514,7 +514,7 @@ class ByzantineAgreement:
 		
 		
 		if self.corrupted and self.bracha_gameplan is not None and self.bracha_gameplan[0] is not None:
-			self.value[0] = self.bracha_gameplan[0] #pawn of the adversary says what?
+			self.value = (self.bracha_gameplan[0],) #pawn of the adversary says what?
 		
 		
 		#aka Bracha Wave 1
@@ -1256,8 +1256,10 @@ class ByzantineAgreement:
 				
 			return False, stuff_to_fulfill
 				
-		except (ValueError, KeyError, IndexError) as e:
-			print e
+		except (ValueError, KeyError, IndexError):
+			traceback.print_exc(None,stdout) #log it
+			#self.log("Error processing coin list {}.".format(coinlist))
+			#print e
 			return None, None		
 		
 		
@@ -1465,7 +1467,7 @@ class ByzantineAgreement:
 	def clearHeldCoinListMessages(self):
 		#called on new iteration - if a new iteration starts, we must have r-received n - t coin lists, NOT counting whatever is in here, so every other good node will receive same. (Or we're a bad node and it doesn't matter.)
 		#this works because if we've reached a new iteration, then there's enough for other nodes to do so.
-		self.heldMessages['coin_list'] = {}
+		self.heldMessages['coin_list'] = []
 	
 	
 	def _brachaWaveTwo(self):
@@ -1475,7 +1477,7 @@ class ByzantineAgreement:
 			self.value = (True,)
 			
 		if self.corrupted and self.bracha_gameplan is not None and self.bracha_gameplan[1] is not None:
-			self.value[0] = self.bracha_gameplan[1] #pawn of the adversary says what?
+			self.value = (self.bracha_gameplan[1],) #pawn of the adversary says what?
 				
 		self.log("Moving to Bracha Wave 2: value is now {}".format(self.value[0]))	
 		#if they are equal, we stay where we are.
@@ -1545,6 +1547,7 @@ class ByzantineAgreement:
 		#deciding_equal = (self.brachaMsgCtrGoodDeciding[0] == self.brachaMsgCtrGoodDeciding[1])
 	
 		if num_deciding_messages >= self.num_nodes - self.fault_bound:
+			self.log("Deciding on {}.".format(True if deciding_value == 1 else False))
 			self._decide(True if deciding_value == 1 else False)
 	
 			return
@@ -1552,6 +1555,7 @@ class ByzantineAgreement:
 			#globalCoin doesn't return immediately, so we can't use its return value - nor can be start the new iteration right away. What we do instead is set up a flag so that the value is set to be captured from globalCoin... or not.
 			self.useCoinValue = False
 			
+			self.log("Running Global-Coin, but setting value to {}.".format(True if deciding_value == 1 else False))
 			#if not deciding_equal:
 			self.value = ((True,) if deciding_value == 1 else (False,)) #use the value in the majority of deciding messages, NOT the value the node previously had.
 			#else:
@@ -1564,6 +1568,7 @@ class ByzantineAgreement:
 			self._globalCoin()
 			
 		else: 
+			self.log("Running Global-Coin and using its value.")
 			self.useCoinValue = True
 			self._globalCoin()
 			
@@ -1976,6 +1981,7 @@ def main(args):
 				#adversarial override - TO DO
 				if message['body'][0] == "gameplan":
 					thisInstance = ByzantineAgreement.getInstance(message['body'][1])
+					print "I'm corrupted for iteration {} now. Gameplan: {}.".format(message['body'][1], message['body'][2])
 					thisInstance.corrupted = True #Having a gameplan also bypasses certain message validation sequences. This is determined by this flag.
 					thisInstance.bracha_gameplan = message['body'][2]
 					#thisInstance.coin_gameplan = message['body'][3] #TODOOOOOOOOO

@@ -56,6 +56,7 @@ def log(message):
 def maybe_setup_instance(byzID, target=default_target):	
 	if byzID not in instances:
 		setup_instance(byzID, target_value=target)	
+	return instances[byzID]
 
 
 def setup_instance(byzID, target_value=None):
@@ -72,24 +73,25 @@ def setup_instance(byzID, target_value=None):
 	instances[byzID]['ei_storage'] = {}  #used to store all the stuff that's epoch-iter specific.
 	
 	##REMOVE BELOW THIS LINE AFTER setup_iteration() IS WORKING
-	instances[byzID]['held_messages'] = {'wave1_wait':[], 'timing_holds':[None,{},{},{}]} # , 'future_iter':{}, 'future_epoch':{}} #storage
-	instances[byzID]['wave_one_bracha_values'] = [set(),set()] #state: used to keep track of the wave 1 bracha values.
-	instances[byzID]['wave_two_messages_counted'] = 0
-	instances[byzID]['wave_three_messages_counted'] = 0
-	instances[byzID]['decide_messages_counted'] = 0
-	instances[byzID]['timing_quotas'] = None #setup_quotas(instances[byzID]['gameplan'], all_nodes, target_value)
+	# instances[byzID]['held_messages'] = {'wave1_wait':[], 'timing_holds':[None,{},{},{}], 'future_iter':[], 'future_epoch':[]} #storage
+# 	instances[byzID]['wave_one_bracha_values'] = [set(),set()] #state: used to keep track of the wave 1 bracha values.
+# 	#instances[byzID]['wave_two_messages_counted'] = 0
+# 	#instances[byzID]['wave_three_messages_counted'] = 0
+# 	instances[byzID]['decide_messages_counted'] = 0
+# 	instances[byzID]['timing_quotas'] = None #setup_quotas(instances[byzID]['gameplan'], all_nodes, target_value)
 	
 	#the following items are DEPRECATED and will become unused.
-	instances[byzID]['epoch'] = {'bracha':{'value':0, 'timing':0}, 'coin':{'value':0, 'timing':0}}
-	instances[byzID]['iteration'] = {'bracha':{'value':0, 'timing':0}, 'coin':{'value':0, 'timing':0}} #the adversary, because it has stalling decisions over the rest of the game, tracks these separately.
+	#instances[byzID]['epoch'] = {'bracha':{'value':0, 'timing':0}, 'coin':{'value':0, 'timing':0}}
+	#instances[byzID]['iteration'] = {'bracha':{'value':0, 'timing':0}, 'coin':{'value':0, 'timing':0}} #the adversary, because it has stalling decisions over the rest of the game, tracks these separately.
 	
 	
-def setup_iteration(thisIteration, target_value=None):		
+def setup_iteration(thisIteration, byzID, target_value=None):		
 	#the following items are FLEXIBLE and are dependent on epoch/iteration.
+	thisIteration['ID'] = byzID
 	thisIteration['held_messages'] = {'wave1_wait':[], 'timing_holds':[None,{},{},{}]} # , 'future_iter':{}, 'future_epoch':{}} #storage
 	thisIteration['wave_one_bracha_values'] = [set(),set()] #state: used to keep track of the wave 1 bracha values.
-	thisIteration['wave_two_messages_counted'] = 0
-	thisIteration['wave_three_messages_counted'] = 0
+	#thisIteration['wave_two_messages_counted'] = 0
+	#thisIteration['wave_three_messages_counted'] = 0
 	thisIteration['decide_messages_counted'] = 0
 	thisIteration['timing_quotas'] = None #setup_quotas(thisIteration['gameplan'], all_nodes, target_value)
 	
@@ -98,14 +100,24 @@ def setup_iteration(thisIteration, target_value=None):
 	#instances[byzID]['iteration'] = {'bracha':{'value':0, 'timing':0}, 'coin':{'value':0, 'timing':0}} #the adversary, because it has stalling decisions over the rest of the game, tracks these separately.
 	#TODO: Iteration turnover.
 	
-def setup_or_get_EI(thisInstance, epoch, iteration):
-	#maybe_setup_instance(byzID)
+def get_EI(message): #extract E/I from message and get EI with it
+	msgmeta = message['meta']['rbid'][2]
+	#print "Trying to get EI for meta {}.".format(msgmeta)
+	return setup_or_get_EI(*msgmeta)
+	
+def setup_or_get_EI(byzID, epoch, iteration):
+	#print "Called with {}, {}, {}.".format(byzID,epoch,iteration)
+	thisInstance = maybe_setup_instance(byzID)
 	
 	if epoch not in thisInstance['ei_storage']:
 		thisInstance['ei_storage'][epoch] = {}
-		thisInstance['ei_storage'][epoch][iteration] = setup_iteration(thisInstance['ei_storage'][iteration], target_value=thisInstance['target_value'])
+		thisInstance['ei_storage'][epoch][iteration] = {}
+		#thisInstance['ei_storage'][epoch][iteration] = 
+		setup_iteration(thisInstance['ei_storage'][epoch][iteration], byzID, target_value=thisInstance['target_value'])
 	elif iteration not in thisInstance['ei_storage'][epoch]:
-		thisInstance['ei_storage'][epoch][iteration] = setup_iteration(thisInstance['ei_storage'][iteration], target_value=thisInstance['target_value'])
+		#thisInstance['ei_storage'][epoch][iteration] = 
+		thisInstance['ei_storage'][epoch][iteration] = {}
+		setup_iteration(thisInstance['ei_storage'][epoch][iteration], byzID, target_value=thisInstance['target_value'])
 
 	return thisInstance['ei_storage'][epoch][iteration]
 
@@ -133,7 +145,7 @@ def setup_quotas(gameplan, node_message_list, target_value, corrupted_nodes, cor
 		quota_list[1] = {}
 		for node in node_list: 
 			quota_list[1][node[0]] = [minority_bound,num_nodes] if target_value else [num_nodes,minority_bound]
-			quota_list[1][node[0]][1 if (corruption_dir if (node[0] in corrupted nodes) else node[1])  else 0]	-= 1 #decrement the node's quota by 1 for its original self message.
+			quota_list[1][node[0]][1 if (corruption_dir if node[0] in corrupted_nodes else node[1]) else 0]	-= 1 #decrement the node's quota by 1 for its original self message.
 			#the above line originally said "1 if node[1] else 0" and its purpose was to decrement the quota by its original message value, so that when the lie came back to that node and was rejected, everything would line up. We still need to subtract one from the quota, because self messages travel free - but the node is forced to lie, so we decrement the quota by one for the lying message instead.
 		print repr(quota_list[1])
 		return quota_list
@@ -145,28 +157,46 @@ def setup_quotas(gameplan, node_message_list, target_value, corrupted_nodes, cor
 		force_minority_counter = len(corrupted_nodes)
 		
 		if target_count >= nontarget_count:
-			majority = target_value
+			majority_val = target_value
 		else:
-			majority = not target_value
+			majority_val = not target_value
 		
 		for node in node_list: 
-			quota_list[2][node[0]] = [num_nodes // 2, num_nodes // 2] #we won't get more than n/2 wave 2 messages of either type, so the deciding flag is never set
+			#quota_list[2][node[0]] = [num_nodes // 2, num_nodes // 2] #we won't get more than n/2 wave 2 messages of either type, so the deciding flag is never set
 			
 			if node[0] in corrupted_nodes:
-				quota_list[1][node[0]] = [minority_bound,num_nodes] if majority else [num_nodes,minority_bound] #set quota so node receives majority value				
+				quota_list[1][node[0]] = [minority_bound,num_nodes] if majority_val else [num_nodes,minority_bound] #set quota so node receives majority value		
+				if majority_val:
+					quota_list[2][node[0]] = [num_nodes // 2, num_nodes // 2 - 1] #node will emit 'true' in wave 1, so account for that in its wave 2 quota
+				else:
+					quota_list[2][node[0]] = [num_nodes // 2 - 1, num_nodes // 2] #will emit 'false', alter quota
+						
 			elif force_minority_counter > 0:
-				quota_list[1][node[0]] = [minority_bound,num_nodes] if not majority else [num_nodes,minority_bound] #set quota so that node receives minority value - to counterbalance majority value going to corrupted nodes
+				quota_list[1][node[0]] = [minority_bound,num_nodes] if not majority_val else [num_nodes,minority_bound] #set quota so that node receives minority value - to counterbalance majority value going to corrupted nodes
 				force_minority_counter -= 1
+				
+				if not majority_val:
+					quota_list[2][node[0]] = [num_nodes // 2, num_nodes // 2 - 1] #will emit 'true', alter quota
+				else:
+					quota_list[2][node[0]] = [num_nodes // 2 - 1, num_nodes // 2] #will emit 'false', alter quota
+				
 			else:
 				#distribute nodes evenly
 				quota_list[1][node[0]] = [minority_bound,num_nodes] if flip else [num_nodes,minority_bound] #true flip yields 'True' wave 2 message - false flip yields 'False' wave 2 message - this ensures the wave 2 messages are split half and have and the wave 2 quota works
+				
+				if flip:
+					quota_list[2][node[0]] = [num_nodes // 2, num_nodes // 2 - 1] #will emit 'true', alter quota
+				else:
+					quota_list[2][node[0]] = [num_nodes // 2 - 1, num_nodes // 2] #will emit 'false', alter quota
+				
 				flip  = not flip
 				
-			quota_list[1][node[0]][1 if (corruption_dir if (node[0] in corrupted nodes) else node[1]) else 0]	-= 1 #decrement the node's quota by 1 for its self message.
+			quota_list[1][node[0]][1 if (corruption_dir if node[0] in corrupted_nodes else node[1]) else 0]	-= 1 #decrement the node's quota by 1 for its self message.
 		print repr(quota_list[1])
 		return quota_list	
 		
 	if gameplan == "split_hold":
+		
 		quota_list[1] = {}
 		quota_list[2] = {}
 		quota_list[3] = {}
@@ -175,22 +205,35 @@ def setup_quotas(gameplan, node_message_list, target_value, corrupted_nodes, cor
 		wave_two_subsample = random.sample(node_list,2*fault_bound) #this population is always 2t big. We don't want more nodes popping the decide flag.
 		
 		for node in node_list:
+			quota_dir = None
+			
+			
 			if node in wave_one_subsample:
 				quota_list[1][node[0]] = [minority_bound,num_nodes] if target_value else [num_nodes,minority_bound] #ensure target value is emitted
+				quota_dir = target_value
 			else:
 				quota_list[1][node[0]] = [num_nodes,minority_bound] if target_value else [minority_bound,num_nodes] #nontarget value is emitted
+				quota_dir = not target_value
 				
-			quota_list[1][node[0]][1 if (corruption_dir if (node[0] in corrupted nodes) else node[1]) else 0]	-= 1
+			quota_list[1][node[0]][1 if (corruption_dir if node[0] in corrupted_nodes else node[1]) else 0]	-= 1
 			#post wave 1: (assuming target is TRUE):
 			#2t TRUE2, rest FALSE2
 			#for smaller t's:
 			#n/2+1 TRUE2, rest FALSE2
 			
-			if node in wave_two_subsample:
+			if node in wave_two_subsample: #selected to emit Target,True
 				quota_list[2][node[0]] = [majority - (num_nodes // 2 + 1),num_nodes] if target_value else [num_nodes,majority - (num_nodes // 2 + 1)] #ensure target value is emitted (wave 2 ver) WITH deciding flag and our target value
 				
-			else:
+				quota_list[3][node[0]] = [majority - (fault_bound + 1),fault_bound*2 - 1] 
+				#wave 3 quotas are strange; instead of determining by value, [False,True]
+				#they determine by the deciding flag being set to [False,True].
+				#so here, we allow up to 2t deciding messages. 
+				#We always want t+1 deciding messages or more. So we only allow (n-t) - (t+1) non-deciding messages, because that guarantees at least t+1 decidings get through.
+				
+				#we also subtract 1 from the 'True' side of the wave 3 quota to allow for the counting of the self message.
+			else: #selected to emit any,False
 				quota_list[2][node[0]] = [num_nodes // 2, num_nodes // 2] 
+				quota_list[3][node[0]] = [majority - (fault_bound + 1) - 1,fault_bound*2] 
 				#ensure deciding flag IS NOT emitted. We don't care about the values that much.
 				#this can't hang because the number of messages required to progress to the next stage will ALWAYS be less than the number the quota will allow, for t < n/3
 				
@@ -201,16 +244,20 @@ def setup_quotas(gameplan, node_message_list, target_value, corrupted_nodes, cor
 # 					Min[Floor[n/2], Max[2 t, Floor[n/2] + 1]] + 
 # 					 Min[Floor[n/2], n - Max[2 t, Floor[n/2] + 1]]
 # 				   }, {t, 1/3*n, 1}]]
-		
+			if quota_dir:
+				quota_list[2][node[0]][1] -= 1 #subtract 1 from wave 2 quota to compensate for 'True' self message
+			else:
+				quota_list[2][node[0]][0] -= 1 #...for 'False' self message
+				
 			#post wave 2:
 			#2t #, DECIDING
 			#rest NOT DECIDING	
 			
-			quota_list[3][node[0]] = [majority - (fault_bound + 1),fault_bound*2] 
-			#wave 3 quotas are strange; instead of determining by value, [False,True]
-			#they determine by the deciding flag being set to [False,True].
-			#so here, we allow up to 2t deciding messages. 
-			#We always want t+1 deciding messages or more. So we only allow (n-t) - (t+1) non-deciding messages, because that guarantees at least t+1 decidings get through.
+			#quota_list[3][node[0]] = [majority - (fault_bound + 1),fault_bound*2] 
+			
+		print repr(quota_list[1])
+		print repr(quota_list[2])
+		print repr(quota_list[3])
 		return quota_list
 
 	#this function sets up the pass quotas for timing
@@ -318,27 +365,35 @@ def return_value_message(message):
 
 
 def hold_message(message,key):
-	instance = get_message_ID(message)
-	maybe_setup_instance(instance)
+	#instance = get_message_ID(message)
+	#maybe_setup_instance(instance)
+	iteration = get_EI(message)
 
-	instances[instance]['held_messages'][key].append(message)	
+	#instances[instance]['held_messages'][key].append(message)
+	iteration['held_messages'][key].append(message)	
 	
 def hold_message_timing(message,sender,wave):
-	instance = get_message_ID(message)
-	maybe_setup_instance(instance)
+	#instance = get_message_ID(message)
+	#maybe_setup_instance(instance)
+	iteration = get_EI(message)
 
-	log("[{}] Holding wave {} timing message [{}] from {} to {}.".format(instance,wave,message['body'],message['meta']['rbid'][0],sender))
+	log("[{}] Holding wave {} timing message [{}] from {} to {}.".format(iteration['ID'],wave,message['body'],message['meta']['rbid'][0],sender))
 
-	if sender not in instances[instance]['held_messages']['timing_holds'][wave]:
-		instances[instance]['held_messages']['timing_holds'][wave][sender] = []
+	if sender not in iteration['held_messages']['timing_holds'][wave]:
+		iteration['held_messages']['timing_holds'][wave][sender] = []
 		
-	instances[instance]['held_messages']['timing_holds'][wave][sender].append(message)
-	
-	
-def release_messages(thisInstance, key): #, message_processor):
+	iteration['held_messages']['timing_holds'][wave][sender].append(message)
 
-	temp_messages_bucket = thisInstance['held_messages'][key] #copy messages into temp bucket
-	thisInstance['held_messages'][key] = [] #clear actual message bucket
+	#if sender not in instances[instance]['held_messages']['timing_holds'][wave]:
+	#	instances[instance]['held_messages']['timing_holds'][wave][sender] = []
+		
+	#instances[instance]['held_messages']['timing_holds'][wave][sender].append(message)
+	
+	
+def release_messages(thisIteration, key): #, message_processor):
+
+	temp_messages_bucket = thisIteration['held_messages'][key] #copy messages into temp bucket
+	thisIteration['held_messages'][key] = [] #clear actual message bucket
 
 	for message in temp_messages_bucket:
 		#process each held message again
@@ -352,13 +407,13 @@ def node_is_overtaken(instance, nodename):
 	return nodename in instances[instance]['fault_list']	
 	
 def send_node_gameplans(instance, nodename, bracha_plan, coin_plan=None):
-	if not maybe_overtake_node(instance, nodename):
-		return False #we couldn't overtake this node, so no send
+	if maybe_overtake_node(instance, nodename):
+		log("[{}] Sending gameplan {} to node {}.".format(instance,bracha_plan,nodename))
+		MessageHandler.send(["gameplan", instance, bracha_plan, coin_plan], None, nodename, type_override='adversary_command')
+		return True
+	
+	return False #we couldn't overtake this node, so no send
 		
-	MessageHandler.send(["gameplan", instance, bracha_plan, coin_plan], None, nodename, type_override='adversary_command')
-	
-	return True 	
-	
 	
 def maybe_overtake_node(instance, nodename):
 	if node_is_overtaken(instance, nodename):
@@ -431,6 +486,7 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 	##'lie_like_a_rug' = Any adversarial node insists that the adversary's target value is ideal. Quite possibly unconvincing depending on how things stacked up.
 	log("{} Received bracha value message {} from {}.".format(thisInstance['ID'],message['body'],message['sender']))
 	
+	thisIteration = get_EI(message)
 	
 	#figure out what wave it is
 	wave = int(message['body'][1])
@@ -442,7 +498,7 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 		return 
 	
 	#When receiving a message, whether we change it or not, alter the node's personal quota to reduce it by one for its original value. This prevents jams where the node can decide inconsistently - the node pre-receives its own message, so we alter the quota to accommodate it. Self-sent messages then travel for free, ignoring quota. (We could always not let them through, with an indefinite hold - in case we're worried about nodes catching on that their value has been altered. But it's easier to just let the messages through for now.)
-	# A FORMER CONCERN: Sooner or later some node will get its quota decremented late 'cause it sent out its value very late, AFTER all the messages have come in and made it decide in a way the adversary didn't want. There's no good way to handle this while maintaining full async. The adversary could also hold off on letting the node receive messages for a wave until it's sent its own value, but this is an advanced enough scenario that if it goes wrong we can just rerun the tests again.
+	# A former concern: Sooner or later some node will get its quota decremented late 'cause it sent out its value very late, AFTER all the messages have come in and made it decide in a way the adversary didn't want. There's no good way to handle this while maintaining full async. The adversary could also hold off on letting the node receive messages for a wave until it's sent its own value, but this is an advanced enough scenario that if it goes wrong we can just rerun the tests again.
 	#
 	#...making an adversary is hard. Also, old man Bracha was a genius. 
 	
@@ -471,20 +527,36 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 	#shaker, None, and lie_like_a_rug (bracha gameplans) do not use timing quotas, so we can skip setting them up.
 	
 	if wave == 1:
-		thisInstance['wave_one_bracha_values'][1 if value else 0].add(message['sender']) #rbid[0]) #store the node in the right bucket
+		if len(thisIteration['wave_one_bracha_values'][0])+len(thisIteration['wave_one_bracha_values'][1]) == num_nodes:
+			#if we're already at full, the extra messages are from corrupted nodes, and get VIP treatment.
+			return_value_message(message)
+			return
+			
+			
+		thisIteration['wave_one_bracha_values'][1 if value else 0].add(message['sender']) #rbid[0]) #store the node in the right bucket
 		log("Holding wave 1 value message.")
 		hold_message(message, 'wave1_wait')	#store the message so the adversary can process them as a batch
 
-		if len(thisInstance['wave_one_bracha_values'][0])+len(thisInstance['wave_one_bracha_values'][1]) == num_nodes:
+		if len(thisIteration['wave_one_bracha_values'][0])+len(thisIteration['wave_one_bracha_values'][1]) == num_nodes:
 			#once everyone has reported in, start changing values.
 			#yeah, yeah, I know. The adversary for a fault-tolerant system isn't fault-tolerant itself! It's ironic, isn't it?
 	
 			#so: we're altering the values of wave 1 messages.
 			#how many nodes are already on our side?
 			log("About to process held wave 1 value messages.")
-			values_target = len(thisInstance['wave_one_bracha_values'][1 if thisInstance['target_value'] else 0])
+			values_target = len(thisIteration['wave_one_bracha_values'][1 if thisInstance['target_value'] else 0])
 			#how many nodes are against us?
-			values_nontarget = len(thisInstance['wave_one_bracha_values'][0 if thisInstance['target_value'] else 1])
+			values_nontarget = len(thisIteration['wave_one_bracha_values'][0 if thisInstance['target_value'] else 1])
+		
+			if values_target == 0 or values_nontarget == 0:
+				#if EVERY node has the same value, the adversary can't do anything. Give up as a convenience measure - otherwise, the experimenter would have to use an 'adv_release' command to continue the iteration if it were under a split_vote or split_hold gameplan (the adversary would make it hang with its indefinite holds).
+				log("Every node is unanimous. Taking no action for this iteration (gameplans from past iterations may carry over for Wave 2/3, but won't have any effect on the outcome).")
+				for thisMessage in thisIteration['held_messages']['wave1_wait']:
+					return_value_message(thisMessage) #return all messages
+				
+				thisIteration['timing_quotas'] = None #quotas can't change anything either, so don't add any
+				return
+				
 		
 			messages_to_change = 0
 			dir_to_change_to = None
@@ -538,11 +610,11 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 				print "Error: Ended up having to change messages in both directions!"
 				exit()
 		
-			log("Messages stack up at {}T/{}F; changing {} messages to {}.".format(thisInstance['wave_one_bracha_values'][1],thisInstance['wave_one_bracha_values'][0],messages_to_change,dir_to_change_to))
+			log("Messages stack up at {}T/{}F; changing {} messages to {}.".format(thisIteration['wave_one_bracha_values'][1],thisIteration['wave_one_bracha_values'][0],messages_to_change,dir_to_change_to))
 		
 			messages_actually_changed = []
 			#now actually change all those held messages
-			for thisMessage in thisInstance['held_messages']['wave1_wait']:
+			for thisMessage in thisIteration['held_messages']['wave1_wait']:
 				#log("Deciding whether to change message from {} with value {}.".format(thisMessage['sender'],thisMessage['body'][2][0]))
 				
 				
@@ -552,22 +624,24 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 				else:
 					#log("Changing message.")
 					
-					messages_to_change -= 1
 					changed = send_node_gameplans(thisInstance['ID'], thisMessage['sender'], gameplan_to_load)
 					#changed = maybe_overtake_node(thisInstance['ID'], thisMessage['sender'])
 					#altered_message, changed = maybe_change_bracha_message(thisMessage, dir_to_change_to)
 					if changed:
+						messages_to_change -= 1
 						messages_actually_changed.append(thisMessage['sender'])
-						return #drop message - corrupted node will resend
+						continue #drop message - corrupted node will resend
 						##TODO - VERY IMPORTANT: Right now, the adversary doesn't handle multiple iterations too well. It doesn't make preferential use of nodes it's already corrupted - it's kinda naive. But it should be sufficient. Manipulating bracha... isn't actually that hard if you have at least one good node that starts different from the others, and you're sure no one is looking over your shoulder.
 						
 						
-					return_value_message(altered_message)
+					return_value_message(thisMessage) #otherwise OK to go
 		
-			thisInstance['timing_quotas'] = setup_quotas(thisInstance['gameplan'], thisInstance['held_messages']['wave1_wait'], thisInstance['target_value'], messages_actually_changed, dir_to_change_to, thisInstance['wave_one_bracha_values'])
+			thisIteration['timing_quotas'] = setup_quotas(thisInstance['gameplan'], thisIteration['held_messages']['wave1_wait'], thisInstance['target_value'], messages_actually_changed, dir_to_change_to, thisIteration['wave_one_bracha_values'])
 		
 			log("Was able to alter {} messages.".format(len(messages_actually_changed)))
-			
+	
+	else:
+		return_value_message(message) #message not altered		
 	# elif wave == 2:
 # 		if thisInstance['gameplan'] == 'force_decide':
 # 			#for force_decide, the overtaken nodes will still emit the original value on wave 2 - this is because they store their natural emitted wave 1 value and reject the altered copy. So, the adversary has to alter their values on wave 2, too.
@@ -622,31 +696,34 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 	#cleanup - if we have later wave value messages, release earlier wave timing messages now	
 	#we used to track iter rollover here, but now we track it on decide messages	
 	if wave == 2:
-		#thisInstance['wave_two_messages_counted'] += 1
+		#thisIteration['wave_two_messages_counted'] += 1
 		
-		if message['sender'] in thisInstance['held_messages']['timing_holds'][1]: #held msgs present?
-			messages_to_release = thisInstance['held_messages']['timing_holds'][1][message['sender']]
+		if message['sender'] in thisIteration['held_messages']['timing_holds'][1]: #held msgs present?
+			messages_to_release = thisIteration['held_messages']['timing_holds'][1][message['sender']]
 			log("Releasing {} wave 1 timing hold messages for {}.".format(len(messages_to_release),message['sender']))
-			thisInstance['held_messages']['timing_holds'][1][message['sender']] = [] #remove held messages
+			thisIteration['held_messages']['timing_holds'][1][message['sender']] = [] #remove held messages
 			for released_message in messages_to_release:
 				return_timing_message(released_message)
+		else:
+			log("No wave 1 timing hold messages for {} to release.".format(message['sender']))
+			#log("Holds: ({})".format(thisIteration['held_messages']['timing_holds'][1]))
+			
+		thisIteration['timing_quotas'][1][message['sender']] = None #either way, empty quota, so future-arriving messages are also let through	
 
 	if wave == 3:
-		#thisInstance['wave_three_messages_counted'] += 1
+		#thisIteration['wave_three_messages_counted'] += 1
 		
-		if message['sender'] in thisInstance['held_messages']['timing_holds'][2]: #held msgs present?
-			messages_to_release = thisInstance['held_messages']['timing_holds'][2][message['sender']]
+		if message['sender'] in thisIteration['held_messages']['timing_holds'][2]: #held msgs present?
+			messages_to_release = thisIteration['held_messages']['timing_holds'][2][message['sender']]
 			log("Releasing {} wave 2 timing hold messages for {}.".format(len(messages_to_release),message['sender']))
-			thisInstance['held_messages']['timing_holds'][2][message['sender']] = [] #remove held messages
+			thisIteration['held_messages']['timing_holds'][2][message['sender']] = [] #remove held messages
 			for released_message in messages_to_release:
 				return_timing_message(released_message)
-	# 
-# 			if thisInstance['wave_two_messages_counted'] == num_nodes:
-# 					iter_rollover(thisInstance,'bracha','value') #next iteration and/or epoch, so 
-# 					
-# 					
-# 				#TODO: release held wave 3 timing messages for this node.
-	
+		else:
+			log("No wave 2 timing hold messages for {} to release.".format(message['sender']))
+			#log("Holds: ({})".format(thisIteration['held_messages']['timing_holds'][2]))		
+		
+		thisIteration['timing_quotas'][2][message['sender']] = None #empty quota		
 	
 	return	
 		
@@ -674,8 +751,9 @@ def process_bracha_message_timing(message,thisInstance):#rbid,thisInstance):
 	if wave == 3:
 		deciding = message['body'][2][1]
 	
+	thisIteration = get_EI(message)
 
-	if thisInstance['timing_quotas'] is None or thisInstance['timing_quotas'][wave] is None:
+	if thisIteration['timing_quotas'] is None or thisIteration['timing_quotas'][wave] is None or thisIteration['timing_quotas'][wave][sender] is None:
 		#no quota - return
 		log("Returning message - no quota.")
 		return_timing_message(message)
@@ -686,26 +764,27 @@ def process_bracha_message_timing(message,thisInstance):#rbid,thisInstance):
 		
 	else:
 		try:
-			quota = thisInstance['timing_quotas'][wave][sender]
+			quota = thisIteration['timing_quotas'][wave][sender]
 		except KeyError:
 			print "You started the adversary with the wrong node names. Start the adversary again and redo the instance you were trying to do from scratch."
-			MessageHandler.shutdown()
+			#MessageHandler.shutdown() #maybe don't do this
 			exit()
 			
 		if wave == 1 or wave == 2:
-			quota = thisInstance['timing_quotas'][wave][sender][1 if value else 0]
+			quota = thisIteration['timing_quotas'][wave][sender][1 if value else 0]
+			
 			if quota > 0:
-				log("Returning message - in quota. (left: {}T/{}F)".format(thisInstance['timing_quotas'][wave][sender][1],thisInstance['timing_quotas'][wave][sender][0]))
-				thisInstance['timing_quotas'][wave][sender][1 if value else 0] -= 1
+				log("Returning message - in quota. (left: {}T/{}F)".format(thisIteration['timing_quotas'][wave][sender][1],thisIteration['timing_quotas'][wave][sender][0]))
+				thisIteration['timing_quotas'][wave][sender][1 if value else 0] -= 1
 				return_timing_message(message) #OK, clear to go. Send it out.
 			else:
 				log("Holding message.")
 				hold_message_timing(message, sender, wave)
 		elif wave == 3:
-			quota = thisInstance['timing_quotas'][wave][sender][1 if deciding else 0]
+			quota = thisIteration['timing_quotas'][wave][sender][1 if deciding else 0]
 			if quota > 0:
-				log("Returning message - in quota. (left: {}T/{}F)".format(thisInstance['timing_quotas'][wave][sender][1],thisInstance['timing_quotas'][wave][sender][0]))
-				thisInstance['timing_quotas'][wave][sender][1 if deciding else 0] -= 1
+				log("Returning message - in quota. (left: {}T/{}F)".format(thisIteration['timing_quotas'][wave][sender][1],thisIteration['timing_quotas'][wave][sender][0]))
+				thisIteration['timing_quotas'][wave][sender][1 if deciding else 0] -= 1
 				return_timing_message(message) #OK, clear to go. Send it out.
 			else:
 				log("Holding message.")
@@ -781,6 +860,8 @@ def process_message_client(message):
 		try:
 			byzID = message['body'][0]
 			wave = message['body'][1]
+			epoch = message['body'][2]
+			iter = message['body'][3]
 		except IndexError:
 			MessageHandler.send("Received invalid adversary command.", None,'client', type_override='announce')
 			return	
@@ -816,32 +897,33 @@ def process_message_special(message):
 	#for decide: release held if it matters
 	
 	thisInstance = get_message_ID(message)
+	thisIteration = get_EI(message)
 	
 	#body[0] will also send start of iteration, epoch messages 
 	
 	if message['body'][0] == 'done':
-		thisInstance['decide_messages_counted'] += 1
+		thisIteration['decide_messages_counted'] += 1
 		#body[1] is the nature of the decision - 'flip' or 'flip_hold' or 'decide'
 		
-		if message['sender'] in thisInstance['held_messages']['timing_holds'][3]: #held msgs present?
-			messages_to_release = thisInstance['held_messages']['timing_holds'][3][message['sender']]
+		if message['sender'] in thisIteration['held_messages']['timing_holds'][3]: #held msgs present?
+			messages_to_release = thisIteration['held_messages']['timing_holds'][3][message['sender']]
 			log("Releasing {} wave 2 timing hold messages for {}.".format(len(messages_to_release),message['sender']))
-			thisInstance['held_messages']['timing_holds'][3][message['sender']] = [] #remove held messages
+			thisIteration['held_messages']['timing_holds'][3][message['sender']] = [] #remove held messages
 			for released_message in messages_to_release:
 				return_timing_message(released_message)
 		
-		if thisInstance['decide_messages_counted'] == num_nodes:
+		if thisIteration['decide_messages_counted'] == num_nodes:
 		##TODO: OK, this doesn't work. All we REALLY need to confirm deciding is that n - t nodes will weigh in and broadcast their 'decide' marker to the adversary. So we turn over and release ALL held messages and stop holding new ones at this moment.
 		##BY THE WAY: We should really make this iteration and so on proof.
 			#flip iteration
-			thisInstance['held_messages']['wave1_wait'] = [] #now clear messages
+			#thisInstance['held_messages']['wave1_wait'] = [] #now clear messages
 			#iter_rollover(thisInstance,'bracha','value') #next iteration and/or epoch
-			thisInstance ['wave_one_bracha_values'] = [set(),set()] #clear out bracha message buckets
+			#thisIteration['wave_one_bracha_values'] = [set(),set()] #clear out bracha message buckets
 			
-			thisInstance['iteration']['bracha']['value'] += 1 #update iteration		
-			thisInstance['iteration']['bracha']['timing'] += 1
-			instances[byzID]['timing_quotas'] = None #setup_quotas(instances[byzID]['gameplan'], node_list, target_value) #reset timing quotas
-			release_messages(thisInstance, 'future_iter') #messages held for a future iteration will be reprocessed now.
+			#thisInstance['iteration']['bracha']['value'] += 1 #update iteration		
+			#thisInstance['iteration']['bracha']['timing'] += 1
+			thisIteration['timing_quotas'] = None #setup_quotas(instances[byzID]['gameplan'], node_list, target_value) #reset timing quotas
+			#release_messages(thisInstance, 'future_iter') #messages held for a future iteration will be reprocessed now.
 
 
 def process_message(message, reprocess=False):
@@ -885,39 +967,39 @@ def process_message(message, reprocess=False):
 		return #huh?
 	
 	
-	maybe_setup_instance(instance)
+	thisInstance = maybe_setup_instance(instance)
 		
-	thisInstance = instances[instance]
+	 #instances[instance]
 		
 	# next, check to see that the message isn't old. If it is old, we've stopped interfering with that iteration and we just let it go through.
 	# might want to rewrite this later.
 	
-	if epoch < thisInstance['epoch'][msgType][code]:
+	# if epoch < thisInstance['epoch'][msgType][code]:
+# 		if code == 'value':
+# 			return_value_message(message)
+# 		elif code == 'timing':
+# 			return_timing_message(message)
+# 	elif iteration < thisInstance['iteration'][msgType][code]:
+# 		if code == 'value':
+# 			return_value_message(message)
+# 		elif code == 'timing':
+# 			return_timing_message(message)
+# 	elif epoch > thisInstance['epoch'][msgType][code]:
+# 		hold_message(message, 'future_epoch') # lambda: thisInstance['epoch'] == epoch)
+# 	elif iteration > thisInstance['iteration'][msgType][code]:
+# 		hold_message(message, 'future_iter') # lambda: thisInstance['iteration'] == iteration)
+# 		#TODO: message release for all four of each of iter/epoch holds (so eight buckets to trigger in total)
+# 	else:
+	if msgType == 'bracha':
 		if code == 'value':
-			return_value_message(message)
+			process_bracha_message_value(message,thisInstance)#rbid,thisInstance)
 		elif code == 'timing':
-			return_timing_message(message)
-	elif iteration < thisInstance['iteration'][msgType][code]:
+			process_bracha_message_timing(message,thisInstance)#rbid,thisInstance)
+	elif msgType == 'coin':
 		if code == 'value':
-			return_value_message(message)
+			process_coin_message_value(message,thisInstance)#rbid,thisInstance)
 		elif code == 'timing':
-			return_timing_message(message)
-	elif epoch > thisInstance['epoch'][msgType][code]:
-		hold_message(message, 'future_epoch') # lambda: thisInstance['epoch'] == epoch)
-	elif iteration > thisInstance['iteration'][msgType][code]:
-		hold_message(message, 'future_iter') # lambda: thisInstance['iteration'] == iteration)
-		#TODO: message release for all four of each of iter/epoch holds (so eight buckets to trigger in total)
-	else:
-		if msgType == 'bracha':
-			if code == 'value':
-				process_bracha_message_value(message,thisInstance)#rbid,thisInstance)
-			elif code == 'timing':
-				process_bracha_message_timing(message,thisInstance)#rbid,thisInstance)
-		elif msgType == 'coin':
-			if code == 'value':
-				process_coin_message_value(message,thisInstance)#rbid,thisInstance)
-			elif code == 'timing':
-				process_coin_message_timing(message,thisInstance)#rbid,thisInstance)
+			process_coin_message_timing(message,thisInstance)#rbid,thisInstance)
 
 		
 	

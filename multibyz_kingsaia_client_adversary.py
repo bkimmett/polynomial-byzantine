@@ -128,15 +128,25 @@ def main(args):
 							print "Couldn't send to adversary - it looks like you're not using an adversarial setup."
 						#send format: message, meta, dest
 					elif command == "adv_release":
-						#TODO: Do for epoch and iteration.
-						byzID, wave, leftovers = split(message2+" ", " ", 2)
+						splits = split(message2+" ", " ", 4)
 						try:
-							MessageHandler.sendToAdversary((byzID,int(wave)),{'mode':'release'})
-							print "Requested adversary release held messages for wave {} of byzID {}.".format(wave, byzID)
+							byzID = splits[0]
+							wave = int(splits[1])
+							if len(splits) > 2:
+								epoch = int(splits[2])
+							else:
+								epoch = None
+							if len(splits) > 3:
+								iter = int(splits[3])
+							else:
+								iter = None
+							#byzID, wave, epoch, iter, leftovers = 
+							MessageHandler.sendToAdversary((byzID,wave,epoch,iter),{'mode':'release'})
+							print "Requested adversary release held messages for wave {} of byzID {}, epoch/iter {}/{}.".format(wave, byzID, epoch, iter)
 						except NameError:
 							print "Couldn't send to adversary - it looks like you're not using an adversarial setup."
-						except ValueError:
-							print "Usage: adv_release byzID wave#"
+						except ValueError, IndexError:
+							print "Usage: adv_release byzID wave# epoch iteration"
 					elif command == "adv_get":
 						try:
 							MessageHandler.sendToAdversary(None,{'mode':'get_gameplan'})
