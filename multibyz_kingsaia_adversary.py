@@ -6,7 +6,7 @@ from __future__ import division #utility
 import random					#for coin flips
 from sys import argv, exit, stdout 		#utility
 from time import sleep, strftime 	#to wait for messages, and for logging
-#from math import floor, sqrt, log 			#utility
+from math import floor, sqrt, log 			#utility
 #from copy import deepcopy 		#utility
 #import numpy as np 				#for matrix operations in _processEpoch
 #from json import dumps			#for making UIDs good
@@ -34,7 +34,7 @@ default_target = False
 all_nodes = []
 
 known_bracha_gameplans = ['none','split_vote','split_hold','force_decide','shaker','lie_like_a_rug']
-known_coin_gameplans = ['none','lie_like_a_rug','wedge','blast','wedge_blast']
+known_coin_gameplans = ['none','bias','bias_reverse','split']
 
 debug = True
 debug_messages = False
@@ -88,13 +88,19 @@ def setup_instance(byzID, target_value=None):
 def setup_iteration(thisIteration, byzID, target_value=None):		
 	#the following items are FLEXIBLE and are dependent on epoch/iteration.
 	thisIteration['ID'] = byzID
-	thisIteration['held_messages'] = {'wave1_wait':[], 'timing_holds':[None,{},{},{}]} # , 'future_iter':{}, 'future_epoch':{}} #storage
+	thisIteration['held_messages'] = {'wave1_wait':[], 'timing_holds':[None,{},{},{}], 'coin_initial':[], 'coin_final':[]} # , 'future_iter':{}, 'future_epoch':{}} #storage
 	thisIteration['wave_one_bracha_values'] = [set(),set()] #state: used to keep track of the wave 1 bracha values.
 	#thisIteration['wave_two_messages_counted'] = 0
 	#thisIteration['wave_three_messages_counted'] = 0
 	thisIteration['decide_messages_counted'] = 0
 	thisIteration['timing_quotas'] = None #setup_quotas(thisIteration['gameplan'], all_nodes, target_value)
 	
+	thisIteration['coin_balance'] = 0
+	thisIteration['initial_coin_hold_balance'] = 0
+	thisIteration['ignore_coin_messages_from'] = []
+	thisIteration['coin_columns_complete'] = 0
+	thisIteration['good_columns_complete'] = 0
+	thisIteration['adversary_column_plans_sent'] = False
 	#the following items are DEPRECATED and will become unused.
 	#instances[byzID]['epoch'] = {'bracha':{'value':0, 'timing':0}, 'coin':{'value':0, 'timing':0}}
 	#instances[byzID]['iteration'] = {'bracha':{'value':0, 'timing':0}, 'coin':{'value':0, 'timing':0}} #the adversary, because it has stalling decisions over the rest of the game, tracks these separately.
@@ -797,33 +803,158 @@ def process_bracha_message_timing(message,thisInstance):#rbid,thisInstance):
 
 	return	
 	
-def process_coin_message_value(message,thisInstance):#rbid,thisInstance):
-	##KNOWN GAMEPLANS: wedge, blast, wedge_blast, lie_like_a_rug
-	##'wedge' - use timing to favor nodes that have their coins go a set way (TIMING)
-	##'blast' - take over some nodes and have them lie about their flips (VALUE)
-	##'wedge_blast' - both wedge and blast at once (VALUE+TIMING)
-	##'lie_like_a_rug' - take over some nodes and have them lie about ALL their flips (unconvincing) (VALUE)
 
-	if thisInstance['gameplan_coin'] == 'wedge' or thisInstance['gameplan_coin'] == None:
-		return_value_message(message) #wedge by itself doesn't alter messages.
-		return
-	else:
+def track_coinboard_balance(message,thisIteration):
+	thisIteration['coin_balance'] += (1 if message['body'][3] else -1)
+	return thisIteration['coin_balance']
 	
-	#but we're not messing with coin messages for now. TODO
-		return_value_message(message)
+def track_column_completion(message,thisIteration):
+	if message['body'][1] == num_nodes - 1:
+		thisIteration['coin_columns_complete'] += 1
+		if not node_is_overtaken(thisInstance,get_message_sender(message)):
+			thisIteration['good_columns_complete'] += 1
+			return True, True
+		return True, False
+	else:
+		return False, None
+	
+def handle_bias_adversary_turn(thisIteration):
+	target_dir = 1 if maybe_setup_instance(thisIteration['ID'])['target_value'] else -1
+
+	if thisInstance['gameplan_coin'] == 'bias_reverse':
+		target_dir *= -1
+
+	if target_dir * thisIteration['coin_balance'] <= 0:
+		#This means the two do not have the same sign, so: the adversary must push to make it work.
+	
+		amount_to_push = 1 - target_dir * thisIteration['coin_balance']
+	
+		if amount_to_push > max_coin_influence_total:
+			log("I don't have enough influence to properly bias this coin flip. Sorry! (needed {}, max infl. {} [{} per column])".format(amount_to_push, max_coin_influence_total, max_coin_influence_per_column))
+			simple_adversary_columns(thisIteration, max_coin_influence_total)
+			#print a warning, give up 
+		else:
+			amount_to_push *= target_dir	
+			simple_adversary_columns(thisIteration, amount_to_push)
+	else:
+		simple_adversary_columns(thisIteration, 0)
+
+def simple_adversary_columns(thisIteration,amount):
+	return
+	#this function sets the adversary columns to broadcast coin flips that sum to this amount. 'None' is "do whatever".
+	
+def process_coin_message_value(message,thisInstance):#rbid,thisInstance):
+	#TODO: THis INSTANCE or this ITERATION?
+
+	##KNOWN GAMEPLANS: bias, split
+	##'bias' - use timing to favor nodes that have their coins go a set way, and have some nodes lie about their flips
+	##'bias_reverse' is the same, but use the opposite of the target value.
+	##'split' - try to split the value so different good nodes get different values.
+	
+	if thisInstance['gameplan_coin'] == None:
+		return_value_message(message) #Don't alter messages if no gameplan is set.
 		return
+		
+	if message['body'][0] == MessageMode.coin_ack:
+		return_value_message(message) #Currently there are no gameplans that alter acknowledgements
+		return
+	
+	#thisIteration['initial_coin_hold_balance'] = 0
+	#thisIteration['coin_balance'] = 0
+	
+	message_sender = get_message_sender(message)
+	
+	is_corrupted_message = node_is_overtaken(thisInstance, message_sender)
+
+	if thisInstance['gameplan_coin'] == 'bias' or thisInstance['gameplan_coin'] == 'bias_reverse':
+		if message['body'][0] == MessageMode.coin_list:
+			#TODO: Make it so that we count coinlists and use that to release held messages later on.
+			return_value_message(message) #Coin lists are not altered in this gameplan
+			return
+	
+	#TODO: If there are not *t* full corrupted columns when we start this, the adversary really wants to control that many ASAP.
+	
+		if message['body'][2] in thisIteration['ignore_coin_messages_from'] or is_corrupted_message:
+			track_coinboard_balance(message) #keep track of the coin balance
+			
+			column_finished, good_column = track_column_completion(message, thisIteration)
+			if column_finished and good_column:
+				if thisIteration['coin_columns_complete'] >= num_nodes - fault_bound:
+					if not thisIteration['adversary_column_plans_sent']:
+						handle_bias_adversary_turn(thisIteration)
+						#If it's full, the adversary gets to act. This will fill here fairly often
+			return_value_message(message) #Message is exempt, or following instructions
+			return
+	
+		
+		
+		message_value = message['body'][3]
+		
+		if message_value != target_value ^ thisInstance['gameplan_coin'] == 'bias_reverse': # ^ is XOR. Why Python just doesn't have a keyword 'xor' is beyond me.
+			hold_message(message,'coin_initial')
+			#thisIteration['initial_coin_hold_balance'] += 1 if message_value else -1
+			#not used for bias
+			
+			
+			if len(thisIteration['held_messages']['coin_initial']) >= num_nodes-fault_bound: #held messages maxed out
+				thisIteration['held_messages']['coin_initial'] = sorted(thisIteration['held_messages']['coin_initial'], key = lambda heldMessage: heldMessage['body'][1], reverse = True) #sort in descending order - we want the columns that progressed farthest 
+			
+				messages_to_release = thisIteration['held_messages']['coin_initial'][0:(num_nodes-2*fault_bound)]
+				#split off the messages into the ones to release and the rest
+				thisIteration['held_messages']['coin_initial'] = [(num_nodes-2*fault_bound):]
+				
+				for message_releasing in messages_to_release:
+					thisIteration['ignore_coin_messages_from'].append(message['body'][2])
+					process_coin_message_value(message_releasing, thisInstance)
+				#TODO: release these messages
+				
+				
+		
+		else:
+			track_coinboard_balance(message) #keep track of the coin balance
+			column_finished, good_column = track_column_completion(message, thisIteration)
+			if column_finished and good_column:
+				if thisIteration['coin_columns_complete'] >= num_nodes - fault_bound:
+					if not thisIteration['adversary_column_plans_sent']:
+						handle_bias_adversary_turn(thisIteration)
+						#If it's full, the adversary gets to act. This will fill here occasionally
+			return_value_message(message) #good to go
+			return
+	
+		
+		#coinflip fmt = marker, message_i, sender, flip value
+		
+		#hold_message(message,'coin_initial')
+	
+	elif thisInstance['gameplan_coin'] == 'split':
+	
+	
+	else:
+		#this really should have been caught by the acknowledged gameplan list.
+		return_value_message(message) #I don't know WHAT this gameplan I've been given is - give up
+		return
+	
+
 	
 	#return message, for now #TODO
 		
 def process_coin_message_timing(message,thisInstance): #rbid,thisInstance):
-	if thisInstance['gameplan_coin'] == 'blast' or thisInstance['gameplan_coin'] == 'lie_like_a_rug' or thisInstance['gameplan_coin'] == None:
-		return_timing_message(message) #blast and lie-like-a-rug don't alter message timing.
+	if thisInstance['gameplan_coin'] == 'bias' or thisInstance['gameplan_coin'] == 'bias_reverse' or thisInstance['gameplan_coin'] == None:
+		return_timing_message(message) #bias doesn't alter message timing, and 'no gameplan' doesn't either
 		return
-	else:
-	
+	elif thisInstance['gameplan_coin'] == 'split':
+		#we can assume we're in the gameplan 'split' now
+		
+		if message['body'][0] == MessageMode.coin_ack:
+			return_timing_message(message) #split doesn't alter acknowledgement timing
+			return
+		
 		return_timing_message(message) #TODO: for now, do nothing
 		return
-
+	else:
+		#how did we get here?
+		return_timing_message(message) #no idea what we're supposed to be doing - give up
+		return
 
 def process_message_client(message):
 	global current_master_gameplan_bracha, current_master_gameplan_coin
@@ -1000,6 +1131,7 @@ def process_message(message, reprocess=False):
 		elif code == 'timing':
 			process_bracha_message_timing(message,thisInstance)#rbid,thisInstance)
 	elif msgType == 'coin':
+		##TODO: VERY LARGE TODO: Make it so that coin lists are accounted separately from coin flips / acks
 		if code == 'value':
 			process_coin_message_value(message,thisInstance)#rbid,thisInstance)
 		elif code == 'timing':
@@ -1027,6 +1159,14 @@ def main(args):
 	fault_bound = (num_nodes - 1) // 3  #t < n/3. Not <=.
 	majority = num_nodes - fault_bound #what's n - t?
 	minority_bound = majority - (majority // 2 + 1) #what's the largest part you can have of n - t without getting a majority of it?
+	max_coin_influence_per_column = floor(5*sqrt(num_nodes*log(num_nodes))) #assuming n flips per column
+	
+	if max_coin_influence_per_column < num_nodes: #if there's leftover column space...
+		if (num_nodes - max_coin_influence_per_column) % 2 == 1: #...and an odd number of leftover spaces per column...
+			max_coin_influence_per_column -= 1 
+			#the other flips in each column have to be SOMETHING, and even if we assume they're balanced, the odd one takes away from the rest.
+	
+	max_coin_influence_total = max_coin_influence_per_column*fault_bound #assuming n flips per column
 	
 	print "Maximum adversarial nodes: {}/{}.".format(fault_bound, num_nodes)
 	
