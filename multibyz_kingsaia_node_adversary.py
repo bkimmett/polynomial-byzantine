@@ -377,6 +377,7 @@ class ByzantineAgreement:
 		#held wave 3 messages are deciding messages.
 		
 		self.decided = False
+		self.doneExtraRoundAfterDecision = False
 		self.decision = None
 		self.useCoinValue = False
 		self.resets = -1
@@ -407,9 +408,16 @@ class ByzantineAgreement:
 		
 	
 	def _reset(self):
-		if self.decided: #inactive after decision
+		if self.decided and self.doneExtraRoundAfterDecision: #inactive after decision
 			return 
+			
+			
 		self.log("Resetting Byzantine instance.")
+		
+		self.decided = False
+		self.doneExtraRoundAfterDecision = False
+		self.decision = None
+		
 		self.value = deepcopy(self.origValue) #reset value to start.
 		#TODO: Does reset() need to reset the node's initial value? This code assumes 'yes'. Otherwise, delete the above line.
 		self.goodNodes = blist(self.nodes) #reset blacklist
@@ -417,7 +425,7 @@ class ByzantineAgreement:
 		self.scores = [0 for _ in self.nodes] #reset list of scores
 		
 		self.pastCoinboards = {}
-		self.pastCoinboardLogs = {} #log the past coinboard as we recorded it then any updates - two copies. One for as it was when we recorded it in logs, one for any updates after being shelved.
+		self.pastCoinboardLogs = {} #clear all past coinboard logs
 		
 		#self.pastWhitelistedCoinboardLists = {} #dictionary of sets - do we need this?
 		
@@ -436,7 +444,7 @@ class ByzantineAgreement:
 		self.epoch = self.maxEpochs * self.resets #epoch = 0 to maxEpochs-1. If a reset occurs, we start at maxEpochs+0, +1, +2, etc.
 	
 	def _startEpoch(self):
-		if self.decided: #inactive after decision
+		if self.decided and self.doneExtraRoundAfterDecision: #inactive after decision
 			return 	
 		
 		self.log("Starting epoch {} for byzantine instance.".format(self.epoch))
@@ -459,10 +467,13 @@ class ByzantineAgreement:
 		self._startBracha()
 		
 	def _startBracha(self):
-		if self.decided: #inactive after decision
+		if self.decided and self.doneExtraRoundAfterDecision: #inactive after decision
 			return 
 			
-		self.log("Starting iteration {} of epoch {}.".format(self.iteration,self.epoch))
+		if self.decided:
+			self.log("Starting extra iteration! (e {1}, i {0})".format(self.iteration,self.epoch))
+		else:
+			self.log("Starting iteration {} of epoch {}.".format(self.iteration,self.epoch))
 			
 		if self.iteration >= self.maxIterations: #nvm, start a new EPOCH instead
 			#TODO: call process epoch
@@ -539,7 +550,7 @@ class ByzantineAgreement:
 		
 		
 	def validateBrachaMsg(self,message):		
-		if self.decided: #inactive after decision
+		if self.decided and self.doneExtraRoundAfterDecision: #inactive after decision
 			return 
 			
 		try: 
@@ -738,6 +749,9 @@ class ByzantineAgreement:
 		
 	def validateCoinMsg(self,message):
 		#we still accept coinboard messages after decision... right?
+		#no - we do the extra round and then stop. The extra round doesn't go to coin.
+		if self.decided and self.doneExtraRoundAfterDecision:
+			return
 		
 		try: 
 			rbid = message['meta']['rbid']
@@ -1086,7 +1100,7 @@ class ByzantineAgreement:
 	def _finalizeCoinboard(self):
 		coinCount = 0	
 		self.log("Finalizing coinboard.")
-		#TODO: When do we generate the numpy array? Or whatever we're using.
+		#TODO: When do we generate the numpy array? Or whatever we're using for Process-Epoch.
 		for node in self.coinboardLogs:
 			if abs(self.coinboardLogs[node][self.iteration]) > 5 * sqrt( self.num_nodes * log(self.num_nodes) ):
 				self.blacklistNode(node)
@@ -1537,6 +1551,12 @@ class ByzantineAgreement:
 		#brachaFinal only fires once - afterward the instance is in 'wave 4' until a new iteration starts.
 		
 		#find maximum number of decider messages. Is it 0 or 1 that takes the crown?
+		
+		if self.decided:
+			#we did our extra round! Sweet!
+			self.doneExtraRoundAfterDecision = True
+			return
+		
 		num_deciding_messages = max(self.brachaMsgCtrGoodDeciding)
 		deciding_value = self.brachaMsgCtrGoodDeciding.index(num_deciding_messages)
 		if self.brachaMsgCtrGoodDeciding[1-deciding_value] > 0:
@@ -1549,6 +1569,10 @@ class ByzantineAgreement:
 		if num_deciding_messages >= self.num_nodes - self.fault_bound:
 			self.log("Deciding on {}.".format(True if deciding_value == 1 else False))
 			self._decide(True if deciding_value == 1 else False)
+			#when we decide, we run one more round. And that means, participating in Global-Coin one last time.
+			self.useCoinValue = False
+			
+			self._globalCoin()
 	
 			return
 		elif num_deciding_messages > self.fault_bound:
@@ -1979,11 +2003,16 @@ def main(args):
 					print repr(message) #TODO: throw error on junk message. Or just drop it.
 			elif message['type'] == "adversary_command":
 				#adversarial override - TO DO
-				if message['body'][0] == "gameplan":
+				if message['body'][0] == "gameplan_bracha" or message['body'][0] == "gameplan_coin"":
 					thisInstance = ByzantineAgreement.getInstance(message['body'][1])
 					print "I'm corrupted for iteration {} now. Gameplan: {}.".format(message['body'][1], message['body'][2])
 					thisInstance.corrupted = True #Having a gameplan also bypasses certain message validation sequences. This is determined by this flag.
-					thisInstance.bracha_gameplan = message['body'][2]
+					if message['body'][0] == "gameplan_bracha":
+						thisInstance.bracha_gameplan = message['body'][2]
+					elif message['body'][0] == "gameplan_coin":
+						thisInstance.coin_gameplan = message['body'][2]
+						#if the node is already corrupted it will WAIT for this message to start sending coin flips
+						
 					#thisInstance.coin_gameplan = message['body'][3] #TODOOOOOOOOO
 					thisInstance._startBracha() #start over with wave 1 message; adversary will toss not-yet-corrupted messages
 					#gameplan format for corrupted nodes:

@@ -33,7 +33,7 @@ default_target = False
 
 all_nodes = []
 
-known_bracha_gameplans = ['none','split_vote','split_hold','force_decide','shaker','lie_like_a_rug']
+known_bracha_gameplans = ['none','split_vote','split_hold','force_decide','lie_like_a_rug'] #there was plans to have a gameplan 'shaker' to play with timing but we're not going to implement that
 known_coin_gameplans = ['none','bias','bias_reverse','split']
 
 debug = True
@@ -59,6 +59,7 @@ def maybe_setup_instance(byzID, target=default_target):
 	return instances[byzID]
 
 
+
 def setup_instance(byzID, target_value=None):
 	global instances
 	instances[byzID] = {}
@@ -71,6 +72,16 @@ def setup_instance(byzID, target_value=None):
 	instances[byzID]['target_value'] = target_value
 
 	instances[byzID]['ei_storage'] = {}  #used to store all the stuff that's epoch-iter specific.
+	
+	
+	corrupt_target_bracha = 0
+	corrupt_target_coin = 0
+	
+	if instances[byzID]['gameplan_coin'] == 'split':
+		corrupt_target_coin = 3
+	elif instances[byzID]['gameplan_coin'] == 'bias' or instances[byzID]['gameplan_coin'] == 'bias_reverse':
+		corrupt_target_coin = fault_bound
+	
 	
 	##REMOVE BELOW THIS LINE AFTER setup_iteration() IS WORKING
 	# instances[byzID]['held_messages'] = {'wave1_wait':[], 'timing_holds':[None,{},{},{}], 'future_iter':[], 'future_epoch':[]} #storage
@@ -127,6 +138,11 @@ def setup_or_get_EI(byzID, epoch, iteration):
 
 	return thisInstance['ei_storage'][epoch][iteration]
 
+def num_nodes_overtaken(iteration):
+	return len(get_nodes_overtaken(iteration))
+	
+def get_nodes_overtaken(iteration):
+	return instances[iteration['ID']]['fault_list']
 	
 def setup_quotas(gameplan, node_message_list, target_value, corrupted_nodes, corruption_dir,  wave1_values): #target_count, nontarget_count):
 	quota_list = [None,None,None,None]
@@ -412,10 +428,10 @@ def release_messages(thisIteration, key): #, message_processor):
 def node_is_overtaken(instance, nodename):
 	return nodename in instances[instance]['fault_list']	
 	
-def send_node_gameplans(instance, nodename, bracha_plan, coin_plan=None):
+def send_node_gameplans(instance, nodename, plan, type="gameplan_bracha"):
 	if maybe_overtake_node(instance, nodename):
-		log("[{}] Sending gameplan {} to node {}.".format(instance,bracha_plan,nodename))
-		MessageHandler.send(["gameplan", instance, bracha_plan, coin_plan], None, nodename, type_override='adversary_command')
+		log("[{}] Sending gameplan {} to node {}.".format(instance,plan,nodename))
+		MessageHandler.send([type, instance, plan], None, nodename, type_override='adversary_command')
 		return True
 	
 	return False #we couldn't overtake this node, so no send
@@ -820,6 +836,8 @@ def track_column_completion(message,thisIteration):
 	
 def handle_bias_adversary_turn(thisIteration):
 	target_dir = 1 if maybe_setup_instance(thisIteration['ID'])['target_value'] else -1
+	
+	even_or_odd = (num_nodes_overtaken(thisIteration) * num_nodes) % 2 #depending on how many adversarial flips are available, the adversary columns must sum to either an even OR an odd number (with which depending on how many flips there are). This needs to be compensated for when setting up the columns so that the adversary can have full columns and still push as needed.
 
 	if thisInstance['gameplan_coin'] == 'bias_reverse':
 		target_dir *= -1
@@ -828,20 +846,69 @@ def handle_bias_adversary_turn(thisIteration):
 		#This means the two do not have the same sign, so: the adversary must push to make it work.
 	
 		amount_to_push = 1 - target_dir * thisIteration['coin_balance']
+		amount_to_push += (0 if even_or_odd == 0 else target_dir) #compensate for even/odd
 	
 		if amount_to_push > max_coin_influence_total:
-			log("I don't have enough influence to properly bias this coin flip. Sorry! (needed {}, max infl. {} [{} per column])".format(amount_to_push, max_coin_influence_total, max_coin_influence_per_column))
+			log("Warning: I don't have enough influence to properly bias this coin flip. Sorry! (needed {}, max infl. {} [{} per column]).".format(amount_to_push, max_coin_influence_total, max_coin_influence_per_column))
 			simple_adversary_columns(thisIteration, max_coin_influence_total)
 			#print a warning, give up 
 		else:
 			amount_to_push *= target_dir	
 			simple_adversary_columns(thisIteration, amount_to_push)
 	else:
-		simple_adversary_columns(thisIteration, 0)
+		simple_adversary_columns(thisIteration, 0 if even_or_odd == 0 else (-1 * target_dir))
 
 def simple_adversary_columns(thisIteration,amount):
-	return
 	#this function sets the adversary columns to broadcast coin flips that sum to this amount. 'None' is "do whatever".
+	if amount is None:
+		for node in get_nodes_overtaken(thisIteration):
+			simple_adversary_single_column(node, thisIteration, None)
+		return
+		#all adv nodes can broadcast as they wish
+		
+	even_or_odd_per_column = num_nodes % 2 	
+		
+	nodes_to_distribute_to = num_nodes_overtaken(thisIteration)
+	
+	even_amount = abs(amount) // nodes_to_distribute_to
+	
+	if even_amount % 2 != even_or_odd_per_column:
+		even_amount -= 1
+	even_amount *= (1 if amount >= 0 else -1)
+	# integer division (//) uses floor(), effectively, which has some funny results when dividing a negative number. This works around that.
+	
+	leftover_count = abs((amount - even_amount*nodes_to_distribute_to)/2) #how many nodes get extras?
+	
+	if leftover_count != 0:
+		ordering = random.sample(range(nodes_to_distribute_to),nodes_to_distribute_to)
+		
+		if abs(even_amount)+2 > max_coin_influence_per_column: 
+			log("Warning: I probably don't have enough influence to properly bias this coin flip. I'll do all I can. Sorry! (needed {}, max infl. {} per column).".format(even_amount, max_coin_influence_per_column))
+			for node in get_nodes_overtaken(thisIteration):
+				simple_adversary_single_column(node, thisIteration, max_coin_influence_per_column * (1 if even_amount >= 0 else -1))
+			return
+		
+		for node in ordering[0:leftover_count]: #the first x nodes get the leftover
+			simple_adversary_single_column(node, thisIteration, even_amount+(2 if even_amount > 0 else -2))
+			
+		for node in ordering[leftover_count:]:
+			simple_adversary_single_column(node, thisIteration, even_amount)
+			
+	else:
+		if abs(even_amount) > max_coin_influence_per_column: 
+			log("Warning: I don't have enough influence to properly bias this coin flip. Sorry! (needed {}, max infl. {} per column).".format(even_amount, max_coin_influence_per_column))
+			for node in get_nodes_overtaken(thisIteration):
+				simple_adversary_single_column(node, thisIteration, max_coin_influence_per_column * (1 if even_amount >= 0 else -1))
+			return
+	
+		for node in get_nodes_overtaken(thisIteration):
+			simple_adversary_single_column(node, thisIteration, even_amount)
+	#each adversarial node gets told to do +/- even_amount, +/- 1 if they are picked from leftover_amount
+	
+	
+def simple_adversary_single_column(node,thisIteration,amount):
+	#tells a single adversarial node how much to broadcast for Global-Coin.
+	send_node_gameplans(thisIteration['ID'], node, amount, type="gameplan_coin")	
 	
 def process_coin_message_value(message,thisInstance):#rbid,thisInstance):
 	#TODO: THis INSTANCE or this ITERATION?
@@ -879,7 +946,7 @@ def process_coin_message_value(message,thisInstance):#rbid,thisInstance):
 			
 			column_finished, good_column = track_column_completion(message, thisIteration)
 			if column_finished and good_column:
-				if thisIteration['coin_columns_complete'] >= num_nodes - fault_bound:
+				if thisIteration['coin_columns_complete'] >= num_nodes - num_nodes_overtaken(thisIteration):
 					if not thisIteration['adversary_column_plans_sent']:
 						handle_bias_adversary_turn(thisIteration)
 						#If it's full, the adversary gets to act. This will fill here fairly often
@@ -914,7 +981,7 @@ def process_coin_message_value(message,thisInstance):#rbid,thisInstance):
 			track_coinboard_balance(message) #keep track of the coin balance
 			column_finished, good_column = track_column_completion(message, thisIteration)
 			if column_finished and good_column:
-				if thisIteration['coin_columns_complete'] >= num_nodes - fault_bound:
+				if thisIteration['coin_columns_complete'] >= num_nodes - fault_bound: #TODO: change to 'num corrupted nodes'
 					if not thisIteration['adversary_column_plans_sent']:
 						handle_bias_adversary_turn(thisIteration)
 						#If it's full, the adversary gets to act. This will fill here occasionally
@@ -927,7 +994,7 @@ def process_coin_message_value(message,thisInstance):#rbid,thisInstance):
 		#hold_message(message,'coin_initial')
 	
 	elif thisInstance['gameplan_coin'] == 'split':
-	
+		pass #TODO: Split gameplan
 	
 	else:
 		#this really should have been caught by the acknowledged gameplan list.
