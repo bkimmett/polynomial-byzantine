@@ -333,6 +333,7 @@ class MessageMode: # pylint: disable=no-init,too-few-public-methods
 	coin_flip = 'MessageMode_coin_flip-1'
 	coin_ack = 'MessageMode_coin_ack-2'
 	coin_list = 'MessageMode_coin_list-3'
+	adv_notify = 'MessageMode_notify-4'
 		
 
 class ByzantineAgreement:
@@ -442,6 +443,7 @@ class ByzantineAgreement:
 		self.resets += 1
 		
 		self.epoch = self.maxEpochs * self.resets #epoch = 0 to maxEpochs-1. If a reset occurs, we start at maxEpochs+0, +1, +2, etc.
+		#TODO: Check that this works with epoch numbers >= maxEpochs.
 	
 	def _startEpoch(self):
 		if self.decided and self.doneExtraRoundAfterDecision: #inactive after decision
@@ -874,8 +876,17 @@ class ByzantineAgreement:
 					self.blacklistNode(rbid[0])
 					return
 			
-				if this_coinboard[message_i][message_j][0] is None:
-					#no value stored
+				if this_coinboard[message_i][message_j][0] is None or self.corrupted: #if we're corrupted, new values ALWAYS replace old ones.
+	
+					if this_coinboard[message_i][message_j][0] is not None: #there's a value here already. Implies we're corrupted.
+						old_message_value = this_coinboard[message_i][message_j][0]
+						#if the adversary replaces a message for a corrupted node, its logs will get screwed up. This fixes it.
+						if message_from_the_past:
+							self.logPastCoinFlip(not old_message_value,message_j,iteration,epoch)
+							#the 'not' unmakes the previous log entry
+						else:
+							self.logCoinFlip(old_message_value,message_j,iteration)
+					
 					this_coinboard[message_i][message_j][0] = message_value
 					
 					if message_from_the_past:
@@ -940,7 +951,7 @@ class ByzantineAgreement:
 						#if we reach the set number for our flip, broadcast the next flip.
 						if not message_from_the_past:	
 							#this does assume it's OUR flip NOW, mind you. If we've gotten all the acknowledgements finally for an old coinboard, then the decision is already made and there's no point updating it further.				
-							if message_i != self.lastCoinBroadcast:
+							if message_i != self.lastCoinBroadcast and not self.corrupted:
 								self.log("SERIOUS ERROR: OK, so we just received the correct number of acknowledgements for one of our {} coin flips, and not the one we just broadcast (currently {} vs {} received). This SHOULD be completely impossible without time travel, glitch, or forgery on a grand scale. ".format("earlier" if message_i < self.lastCoinBroadcast else "later", self.lastCoinBroadcast, message_i))
 								#TODO: But do we DO anything about it?
 							else:
@@ -1030,8 +1041,7 @@ class ByzantineAgreement:
 			return #this can't be processed, no way no how.
 	
 	def logCoinFlip(self,flip_value, node, iteration):
-		self.logCoinFlipSubsidiary(self.coinboardLogs,flip_value, node, iteration)
-	
+		self.logCoinFlipSubsidiary(self.coinboardLogs,flip_value, node, iteration)	
 	
 	def logPastCoinFlip(self,flip_value, node, iteration, epoch):
 	#TODO: Use DeepCopy when copying.
@@ -1061,10 +1071,19 @@ class ByzantineAgreement:
 		#if username not in self.coinboard[0]:
 		#	self.coinboard[0][username] = [None,set()] #put our first coin here
 		
-		coin_value = self._broadcastCoin(0)
-		self.log("Broadcast my first coin flip: {}.".format(coin_value))
+		MessageHandler.sendToAdversary((MessageMode.adv_notify,'bracha_over'),{'code':'info','rbid':(username,message_counter,(self.ID, self.epoch, self.iteration))})
 		
-		self.coinboard[0][username][0] = coin_value #store our first coin in the coinboard
+		if not self.corrupted or self.coin_gameplan is not None:
+			#corrupted nodes will wait for a gameplan.
+			coin_value = self._broadcastCoin(0)
+		else:
+			coin_value = None
+			
+		if coin_value is not None:	
+			self.log("Broadcast my first coin flip: {}.".format(coin_value))
+		
+			# self.coinboard[0][username][0] = coin_value #store our first coin in the coinboard
+			# this is now done in broadcastCoin
 		
 		if self.coinState > 0: #0 = waiting 1 = sending coins 2 = sending lists 3 = done?
 			self.log("Error: Global Coin start called with Coin State >= 1.")
@@ -1087,8 +1106,72 @@ class ByzantineAgreement:
 	
 	def _broadcastCoin(self,message_i):
 		global username, random_generator
-		flip = (random_generator.random() >= .5) #True if >= .5, otherwise False. A coin toss.
+		
+		self.ensureCoinboardPosExists(self.coinboard, message_i, username)
+		self.coinboard[message_i][username] = [None, set()] #set up log blank
+		
+		if self.corrupted:
+			if self.coin_gameplan is None:
+				return None #no coin flips today
+			if isinstance(self.coin_gameplan,int):
+				#target to hit with full column. Generate biased coin flip
+				flips_left = num_nodes - message_i
+				if username in self.coinboardLogs and len(self.coinboardLogs[username]) > message_i:
+					value_so_far = self.coinboardLogs[username][message_i]
+				else:
+					value_so_far = 0
+					#the log entries will be added after we make the flip
+				delta_needed = self.coin_gameplan - value_so_far
+				neutral_flips = flips_left - abs(delta_needed) 
+				if neutral_flips % 2 == 1:
+					#we've been asked to do the impossible and get a value we can't and still maintain a full column. Let's fix this.
+					
+					if self.coin_gameplan == 0:
+						#which way do we push the target to make it work? argh
+						self.log("WARNING: The adversary has asked for an impossible coin target of 0. I'm going to toss a coin and set my target to +/- 1. Sorry about this!")
+						self.coin_gameplan = 1 if (random_generator.random() >= .5) >= 0 else -1 
+					
+					elif abs(self.coin_gameplan) > floor(5*sqrt(num_nodes*log(num_nodes))):
+						#uh-oh. We overstepped. Dial it back a little to fit.
+						self.log("WARNING: The adversary has asked for an impossible coin target ({}), and we're at the influence limit. Changing the target to be slightly smaller.".format(self.coin_gameplan))
+						self.coin_gameplan -= 1 if self.coin_gameplan >= 0 else -1 
+						
+					else:
+						#OK, we can do this with just a bit more push.
+						self.log("Warning: The adversary has asked for an impossible coin target ({}). Changing the target to be slightly larger.".format(self.coin_gameplan))
+						self.coin_gameplan += 1 if self.coin_gameplan >= 0 else -1 
+						
+					delta_needed = self.coin_gameplan - value_so_far
+					neutral_flips = flips_left - abs(delta_needed) 
+				
+				flips_of_type = [neutral_flips // 2,neutral_flips // 2]
+				flips_of_type[0 if delta_needed < 0 else 1] += abs(delta_needed)
+				
+				#now make the biased coin flip
+				flip = (random_generator.randint(1,sum(flips_of_type)) > flips_of_type[0])
+				
+				
+				
+			if isinstance(self.coin_gameplan,list):
+				#exact list of stuff to do. (empty list means node is silent)
+				
+				if len(self.coin_gameplan) < message_i:
+					self.coin_gameplan = None #reset gameplan
+					return None #no more coin flips
+					#TODO: Check the output from this function.
+					
+				flip = self.coin_gameplan[message_i]
+		
+		else:
+			flip = (random_generator.random() >= .5) #True if >= .5, otherwise False. A coin toss.
+		
+		#actually broadcast flip
 		ReliableBroadcast.broadcast((MessageMode.coin_flip, message_i, username,flip),extraMeta=(self.ID,self.epoch,self.iteration))
+		
+		#log our own flip
+		
+		self.coinboard[message_i][username][0] = flip
+		self.logCoinFlip(flip, username, message_i) #this is convenient. It also provides a defense against a MITMing adversary, while allowing a taken-over node to refer to its history when making flips
 		
 		return flip #so we can use it too
 		
@@ -1149,7 +1232,9 @@ class ByzantineAgreement:
 
 		
 		self.iteration += 1
+		self.coin_gameplan = None #reset coin gameplan if it's not already reset
 		self._startBracha()
+		MessageHandler.sendToAdversary((MessageMode.adv_notify,'coin_over'),{'code':'info','rbid':(username,message_counter,(self.ID, self.epoch, self.iteration))})
 		#Summon next round (iteration).
 		#epoch processing will be triggered in startBracha() if need be.
 
@@ -1262,7 +1347,7 @@ class ByzantineAgreement:
 					if coin_i <= stuff_to_fulfill[coin_j]:
 						continue #accept the higher of the two values in the duplicate
 				
-				if len(coinboard) <= coin_i or coin_j not in self.coinboard[coin_i] or coinboard[coin_i][coin_j][0] is None: #not got to that round yet OR no entry for that node OR no value in that node's entry
+				if len(coinboard) < coin_i or coin_j not in self.coinboard[coin_i] or coinboard[coin_i][coin_j][0] is None: #not got to that round yet OR no entry for that node OR no value in that node's entry
 					stuff_to_fulfill[coin_j] = coin_i	
 				
 			if len(stuff_to_fulfill) == 0:
@@ -2003,25 +2088,33 @@ def main(args):
 					print repr(message) #TODO: throw error on junk message. Or just drop it.
 			elif message['type'] == "adversary_command":
 				#adversarial override - TO DO
-				if message['body'][0] == "gameplan_bracha" or message['body'][0] == "gameplan_coin"":
+				if message['body'][0] == "gameplan_bracha" or message['body'][0] == "gameplan_coin":
 					thisInstance = ByzantineAgreement.getInstance(message['body'][1])
+					
+					
 					print "I'm corrupted for iteration {} now. Gameplan: {}.".format(message['body'][1], message['body'][2])
 					thisInstance.corrupted = True #Having a gameplan also bypasses certain message validation sequences. This is determined by this flag.
 					if message['body'][0] == "gameplan_bracha":
 						thisInstance.bracha_gameplan = message['body'][2]
+						thisInstance._startBracha() #start over with wave 1 message; adversary will toss not-yet-corrupted messages
 					elif message['body'][0] == "gameplan_coin":
 						thisInstance.coin_gameplan = message['body'][2]
 						#if the node is already corrupted it will WAIT for this message to start sending coin flips
+						#so previous calls to broadcast(0) will return None and no coin is broadcast
+						#so we just broadcast now
+						#if the node IS NOT corrupted and became corrupted, the broadcasted message will be discarded by the adversary. So we can rebroadcast our last coin broadcast.
 						
-					#thisInstance.coin_gameplan = message['body'][3] #TODOOOOOOOOO
-					thisInstance._startBracha() #start over with wave 1 message; adversary will toss not-yet-corrupted messages
+						thisInstance._broadcastCoin(thisInstance.lastCoinBroadcast)
+						
+					
 					#gameplan format for corrupted nodes:
-					#[0]: "gameplan"
+					#[0]: "gameplan_bracha" or "gameplan_coin"
 					#[1]: Byzantine ID the node is corrupted for.
 					#[2]: Bracha values. List of three values, the last including the deciding flag. Ex. [True, False, (False,True)]. If any value in the list is None, the node just acts natural. If the entire list is None, the node refuses to participate in bracha.
-					#[3]: Coin values. Ignored for now.
+					# ==OR== 
+					#[2]: Coin values. Could be [] (no broadcast), a list of values (broadcast these in this order), a number (target to this value once you have a full column).
 					
-					
+					#TODO: 'print' vs 'log'
 				pass
 			elif message['type'] == "decide":
 				#someone's deciding - IGNORE
