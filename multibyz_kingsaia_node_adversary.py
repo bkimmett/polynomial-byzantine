@@ -19,10 +19,11 @@ from blist import blist 		#containers that offer better performance when they ge
 
 #debug logging
 
-debug_rb = False
-debug_rb_coin = False
-debug_rb_accept = False
+debug_rb = True
+debug_rb_coin = True
+debug_rb_accept = True
 debug_byz = True
+debug_show_coinboards = True
 
 
 #Reminder: message[sender] is the node that sent the message the 'last mile'. It is NOT the original sender. rbid[0] is the real originating sender.
@@ -106,14 +107,14 @@ class ReliableBroadcast: # pylint: disable=no-init
 		if debug_rb:
 			global username
 			print "[{}:{}] {}".format(strftime("%H:%M:%S"),username,message)
-			stdout.flush() #force write
+			#stdout.flush() #force write
 	
 	@classmethod
 	def logCoin(thisClass,message):
 		if debug_rb_coin:
 			global username
 			print "[{}:{}] {}".format(strftime("%H:%M:%S"),username,message)
-			stdout.flush() #force write
+			#stdout.flush() #force write
 		
 	
 	@classmethod
@@ -197,17 +198,24 @@ class ReliableBroadcast: # pylint: disable=no-init
 			pass #it's not byzantine
 			
 		###try:
-		if is_byzantine_related and checkCoinboardMessages and (data[0] == MessageMode.coin_flip or data[0] == MessageMode.coin_list):
-			if data[0] == MessageMode.coin_list:
-				thisClass.logCoin("Received coin list RB message from {}. Phase: {}.".format(rbid[0],phase))
-			instance = ByzantineAgreement.getInstance(rbid[2][0]) #rbid[2][0] = extraMeta[0] = byzID
-			if not instance.checkCoinboardMessageHolding(message):
-				if data[0] == MessageMode.coin_list:
-					thisClass.logCoin("Held by checkCoinboardMessageHolding.")
-				return None#if held, stop processing for now
-			if data[0] == MessageMode.coin_list:
-				thisClass.logCoin("Good to go!")		
+		if is_byzantine_related and (data[0] == MessageMode.coin_flip or data[0] == MessageMode.coin_list):
+			
+			if data[0] == MessageMode.coin_flip:
+					thisClass.logCoin("Received coin flip RB message from {}. Phase: {}.".format(rbid[0],phase))
 					
+			if checkCoinboardMessages:
+				#if data[0] == MessageMode.coin_list:
+				#	thisClass.logCoin("Received coin list RB message from {}. Phase: {}.".format(rbid[0],phase))
+				instance = ByzantineAgreement.getInstance(rbid[2][0]) #rbid[2][0] = extraMeta[0] = byzID
+				if not instance.checkCoinboardMessageHolding(message):
+					#if data[0] == MessageMode.coin_list:
+					if data[0] == MessageMode.coin_flip:
+						thisClass.logCoin("Held by checkCoinboardMessageHolding.")
+					return None#if held, stop processing for now
+				#if data[0] == MessageMode.coin_list:
+				#thisClass.logCoin("Good to go!")		
+			else:
+				thisClass.logCoin("Not checking checkCoinboardMessageHolding.")		
 					
 				#coinboard message - possibly hold for later!
 				#coinboard messages can be held for the following reasons:
@@ -257,7 +265,7 @@ class ReliableBroadcast: # pylint: disable=no-init
 			if thisClass.broadcasting_echoes[uid][3] == thisClass.RBPhase.initial or thisClass.broadcasting_echoes[uid][3] == thisClass.RBPhase.echo:
 				thisClass.log("Initial/Echo Phase: {}/{} of {} ready messages so far.".format(len(thisClass.broadcasting_echoes[uid][2]), thisClass.fault_bound + 1, thisClass.num_nodes)) #print how many readies we need to advance
 			elif thisClass.broadcasting_echoes[uid][3] == thisClass.RBPhase.ready:
-				thisClass.log("Ready Phase: {}/{} of {} ready messages so far.".format(len(thisClass.broadcasting_echoes[uid][2]), thisClass.fault_bound*2 + 1, thisClass.num_nodes)) #print how many readies we need to accept
+				thisClass.log("Ready Phase: {}/{} of {} ready messages so far.".format(len(thisClass.broadcasting_echoes[uid][2]), thisClass.num_nodes - thisClass.fault_bound, thisClass.num_nodes)) #thisClass.fault_bound*2 + 1, thisClass.num_nodes)) #print how many readies we need to accept
 			else: 
 				thisClass.log("{} of {} ready messages.".format(len(thisClass.broadcasting_echoes[uid][2]), thisClass.num_nodes)) #print how many readies we got
 		else:
@@ -281,7 +289,7 @@ class ReliableBroadcast: # pylint: disable=no-init
 					
 		if thisClass.broadcasting_echoes[uid][3] == thisClass.RBPhase.initial:
 			#waiting to send echo
-			if thisClass.broadcasting_echoes[uid][0] or len(thisClass.broadcasting_echoes[uid][1]) >= (num_nodes + fault_bound) / 2 or len(thisClass.broadcasting_echoes[uid][2]) >= fault_bound + 1: #one initial OR (n+t)/2 echoes OR t+1 readies
+			if thisClass.broadcasting_echoes[uid][0] or len(thisClass.broadcasting_echoes[uid][1]) >= (thisClass.num_nodes + thisClass.fault_bound) / 2 or len(thisClass.broadcasting_echoes[uid][2]) >= thisClass.fault_bound + 1: #one initial OR (n+t)/2 echoes OR t+1 readies
 				#ECHO!
 				thisClass.log("SENDING ECHO reliable broadcast message for key < {} > to all.".format(repr(data)))
 				MessageHandler.sendAll(data,{'phase':thisClass.RBPhase.echo,'rbid':rbid})
@@ -293,7 +301,7 @@ class ReliableBroadcast: # pylint: disable=no-init
 				
 		if thisClass.broadcasting_echoes[uid][3] == thisClass.RBPhase.echo:
 			#waiting to send ready
-			if len(thisClass.broadcasting_echoes[uid][1]) >= (num_nodes + fault_bound) / 2 or len(thisClass.broadcasting_echoes[uid][2]) >= fault_bound + 1: #(n+t)/2 echoes OR t+1 readies
+			if len(thisClass.broadcasting_echoes[uid][1]) >= (thisClass.num_nodes + thisClass.fault_bound) / 2 or len(thisClass.broadcasting_echoes[uid][2]) >= thisClass.fault_bound + 1: #(n+t)/2 echoes OR t+1 readies
 				#READY!
 				thisClass.log("SENDING READY reliable broadcast message for key < {} > to all.".format(repr(data)))
 				MessageHandler.sendAll(data,{'phase':thisClass.RBPhase.ready,'rbid':rbid})
@@ -304,7 +312,7 @@ class ReliableBroadcast: # pylint: disable=no-init
 				
 		if thisClass.broadcasting_echoes[uid][3] == thisClass.RBPhase.ready:
 			#waiting to accept
-			if len(thisClass.broadcasting_echoes[uid][2]) >= thisClass.fault_bound*2 + 1: #2t+1 readies only
+			if len(thisClass.broadcasting_echoes[uid][2]) >= thisClass.num_nodes - thisClass.fault_bound: #thisClass.fault_bound*2 + 1: #2t+1 readies only
 				#ACCEPT!
 				thisClass.broadcasting_echoes[uid][3] = thisClass.RBPhase.done
 				return thisClass.acceptRbroadcast(data,rbid)
@@ -346,7 +354,7 @@ class ByzantineAgreement:
 		if debug_byz:
 			global username
 			print "[{}:{}:{}] {}".format(strftime("%H:%M:%S"),username,self.ID,message)
-			stdout.flush() #force write
+			#stdout.flush() #force write
 	
 	@classmethod
 	def getInstance(thisClass,byzID):
@@ -880,12 +888,12 @@ class ByzantineAgreement:
 	
 					if this_coinboard[message_i][message_j][0] is not None: #there's a value here already. Implies we're corrupted.
 						old_message_value = this_coinboard[message_i][message_j][0]
-						#if the adversary replaces a message for a corrupted node, its logs will get screwed up. This fixes it.
+						#if the adversary replaces a message for a corrupted node, its logs'll get screwed up. This should fix it.
 						if message_from_the_past:
 							self.logPastCoinFlip(not old_message_value,message_j,iteration,epoch)
 							#the 'not' unmakes the previous log entry
 						else:
-							self.logCoinFlip(old_message_value,message_j,iteration)
+							self.logCoinFlip(not old_message_value,message_j,iteration)
 					
 					this_coinboard[message_i][message_j][0] = message_value
 					
@@ -959,7 +967,6 @@ class ByzantineAgreement:
 								self.lastCoinBroadcast += 1
 								if self.lastCoinBroadcast < self.num_nodes:
 									coin = self._broadcastCoin(self.lastCoinBroadcast)
-									self.log("Broadcast my next coin flip (#{}): {}.".format(self.lastCoinBroadcast+1,coin))
 									##TODO: This can never happen while the coinboard is undefined, right?
 									self.ensureCoinboardPosExists(self.coinboard, self.lastCoinBroadcast, username)
 									
@@ -1079,11 +1086,11 @@ class ByzantineAgreement:
 		else:
 			coin_value = None
 			
-		if coin_value is not None:	
-			self.log("Broadcast my first coin flip: {}.".format(coin_value))
-		
+		#if coin_value is not None:	
+			#self.log("Broadcast my first coin flip: {}.".format(coin_value))
 			# self.coinboard[0][username][0] = coin_value #store our first coin in the coinboard
-			# this is now done in broadcastCoin
+			
+			# these are now done in broadcastCoin
 		
 		if self.coinState > 0: #0 = waiting 1 = sending coins 2 = sending lists 3 = done?
 			self.log("Error: Global Coin start called with Coin State >= 1.")
@@ -1115,14 +1122,18 @@ class ByzantineAgreement:
 				return None #no coin flips today
 			if isinstance(self.coin_gameplan,int):
 				#target to hit with full column. Generate biased coin flip
+				self.log("Creating biased flip for target {}.".format(self.coin_gameplan))
 				flips_left = num_nodes - message_i
-				if username in self.coinboardLogs and len(self.coinboardLogs[username]) > message_i:
-					value_so_far = self.coinboardLogs[username][message_i]
+				if username in self.coinboardLogs and len(self.coinboardLogs[username]) > self.iteration:
+					value_so_far = self.coinboardLogs[username][self.iteration]
 				else:
 					value_so_far = 0
 					#the log entries will be added after we make the flip
+				
 				delta_needed = self.coin_gameplan - value_so_far
 				neutral_flips = flips_left - abs(delta_needed) 
+				self.log("{} flips left, current column value {}. We need delta of {} and have {} pairs of neutral flips.".format(flips_left, value_so_far, delta_needed, neutral_flips / 2))
+				
 				if neutral_flips % 2 == 1:
 					#we've been asked to do the impossible and get a value we can't and still maintain a full column. Let's fix this.
 					
@@ -1166,12 +1177,13 @@ class ByzantineAgreement:
 			flip = (random_generator.random() >= .5) #True if >= .5, otherwise False. A coin toss.
 		
 		#actually broadcast flip
+		self.log("Broadcast my coin flip #{}: {}.".format(message_i,flip))
 		ReliableBroadcast.broadcast((MessageMode.coin_flip, message_i, username,flip),extraMeta=(self.ID,self.epoch,self.iteration))
 		
 		#log our own flip
 		
 		self.coinboard[message_i][username][0] = flip
-		self.logCoinFlip(flip, username, message_i) #this is convenient. It also provides a defense against a MITMing adversary, while allowing a taken-over node to refer to its history when making flips
+		self.logCoinFlip(flip, username, self.iteration) #this is convenient. It also provides a defense against a MITMing adversary, while allowing a taken-over node to refer to its history when making flips
 		
 		return flip #so we can use it too
 		
@@ -1183,18 +1195,29 @@ class ByzantineAgreement:
 	def _finalizeCoinboard(self):
 		coinCount = 0	
 		self.log("Finalizing coinboard.")
+		
+		if debug_show_coinboards:
+			#show coinboard, but without acknowledgements
+			self.log("Coinboard = {}".format([{node : val[0] for node, val in flipLine.iteritems()} for flipLine in self.coinboard]))
+			self.log("Coinboard Logs = {}".format(self.coinboardLogs))
+		
 		#TODO: When do we generate the numpy array? Or whatever we're using for Process-Epoch.
 		for node in self.coinboardLogs:
-			if abs(self.coinboardLogs[node][self.iteration]) > 5 * sqrt( self.num_nodes * log(self.num_nodes) ):
-				self.blacklistNode(node)
+			if len(self.coinboardLogs[node]) > self.iteration: 
+				#this if statement checks that stuff from this node was logged at all. If it's not, then we mark it as '0' in the logs
+				if abs(self.coinboardLogs[node][self.iteration]) > 5 * sqrt( self.num_nodes * log(self.num_nodes) ):
+					self.blacklistNode(node)
+				else:
+					if node in self.goodNodes: #we don't include pre-blacklisted nodes in our count.
+						coinCount += self.coinboardLogs[node][self.iteration]
 			else:
-				if node in self.goodNodes: #we don't include pre-blacklisted nodes in our count.
-					coinCount += self.coinboardLogs[node][self.iteration]
-		
-		if len(self.epochFlips) < self.iteration:
-			self.epochFlips.extend([0 for _ in range(self.iteration - len(self.epochFlips))])
+				#add log slots
+				self.coinboardLogs[node].extend([0 for _ in xrange(len(self.coinboardLogs[node]) - self.iteration + 1)])
+				
+		if len(self.epochFlips) <= self.iteration:
+			self.epochFlips.extend([0 for _ in xrange(self.iteration - len(self.epochFlips))])
 			
-		if len(self.epochFlips) > self.iteration:
+		if len(self.epochFlips) > self.iteration + 1:
 			if self.epochFlips[self.iteration] != 0:
 				self.log("Uh-oh. Went to fill in the result for an interation and it was already filled in. This indicates _finalizeCoinboard was called more than once in an iteration. A bug fix will likely be necessary.")
 				raise RuntimeError('called _finalizeCoinboard twice in an iteration')
@@ -1343,12 +1366,36 @@ class ByzantineAgreement:
 					self.log("Error: Coin list from {} has an invalid i ({}) on {}'s column.".format(sender,coin_i,coin_j))
 					return None, None
 				if coin_j in stuff_to_fulfill:
+					#TODO: fix this
 					self.log("Warning: Coin list from {} may be invalid. It has more than one entry for j {}.".format(sender,coin_j))
 					if coin_i <= stuff_to_fulfill[coin_j]:
 						continue #accept the higher of the two values in the duplicate
 				
-				if len(coinboard) < coin_i or coin_j not in self.coinboard[coin_i] or coinboard[coin_i][coin_j][0] is None: #not got to that round yet OR no entry for that node OR no value in that node's entry
-					stuff_to_fulfill[coin_j] = coin_i	
+				temp_stuff = []
+				for i in range(0, coin_i+1):
+					#find all missing values in this column
+					if len(coinboard) < i:
+						temp_stuff.extend(range(i, coin_i+1)) #all the remaining items have not been received 
+						break
+					
+					if coin_j not in coinboard[i] or coinboard[i][coin_j][0] is None:
+						temp_stuff.append(i)
+				
+				if len(temp_stuff) > 0:
+					stuff_to_fulfill[coin_j] = temp_stuff
+				
+				
+				# if len(coinboard) < coin_i or coin_j not in coinboard[coin_i]:
+# 					stuff_to_fulfill[coin_j] = range(0, coin_i+1)
+# 					#not got to that round yet OR no entry for that node OR no value in the entry of a past node
+# 				else:
+# 					temp_stuff = []
+# 					
+# 					
+# 				
+# 				 None in zip(*(coinboard[coin_i]))[0]:
+# 					#not got to that round yet OR no entry for that node OR no value in the entry of a past node
+# 					stuff_to_fulfill[coin_j] = coin_i	
 				
 			if len(stuff_to_fulfill) == 0:
 				return True, None
@@ -1510,7 +1557,7 @@ class ByzantineAgreement:
 			return
 			
 		if len(self.heldMessages['coin_flip'][(searchEpoch,searchIteration)][(target_i,target_j)]) > 0:
-			self.log("Releasing held coin flip messages for {} round {}.".format(target_j,target_i))	
+			self.log("Releasing {} held coin flip messages for {} round {}.".format(len(self.heldMessages['coin_flip'][(searchEpoch,searchIteration)][(target_i,target_j)]),target_j,target_i))	
 			
 		for message in self.heldMessages['coin_flip'][(searchEpoch,searchIteration)][(target_i,target_j)]:
 			ReliableBroadcast.handleRBroadcast(message,checkCoinboardMessages=False)
@@ -1524,22 +1571,35 @@ class ByzantineAgreement:
 			self.log("Clearing held coin list items for this message.")
 		
 		messages_decremented = 0
-		new_block_lengths = []
+		blocks_removed = 0
+		lists_released = 0
+		#new_block_lengths = []
 		
-		for messageID in range(len(self.heldMessages['coin_list']) - 1,-1,-1): #list indices from n to 0 in reverse order
-			#thisMessage = self.heldMessages['coin_list'][messageID]
+		for messageID in range(len(self.heldMessages['coin_list']) - 1,-1,-1): #list indices from n to 0 in reverse order			
 			if accepted_flip_j in self.heldMessages['coin_list'][messageID][0]: #[0] is the message block's dict of stuff to do. [1] would be the actual message.
-				if accepted_flip_i >= thisMessage[0][accepted_flip_j]:
-					del self.heldMessages['coin_list'][messageID][0][accepted_flip_j]
+				if accepted_flip_i in self.heldMessages['coin_list'][messageID][0][accepted_flip_j]:
+					self.heldMessages['coin_list'][messageID][0][accepted_flip_j].remove(accepted_flip_i)
 					messages_decremented += 1
-					new_block_lengths.append(len(self.heldMessages['coin_list'][messageID][0]))
-					if len(self.heldMessages['coin_list'][messageID][0]) == 0:
-						del self.heldMessages['coin_list'][messageID]
-						ReliableBroadcast.handleRBroadcast(thisMessage[1], checkCoinboardMessages=False) #send the message back out and process it
-						#TODO: For efficiency, this should probably be here under the check that we cleared something. But what if a {} (ready to go) list ends up here? It'll never be released. Fix this... maybe check when storing?
+					if len(self.heldMessages['coin_list'][messageID][0][accepted_flip_j]) == 0:
+						del self.heldMessages['coin_list'][messageID][0][accepted_flip_j]
+						blocks_removed += 1
+								
+				
+# 				if accepted_flip_i >= self.heldMessages['coin_list'][messageID][0][accepted_flip_j]:
+# 					del self.heldMessages['coin_list'][messageID][0][accepted_flip_j]
+# 					messages_decremented += 1
+# 					new_block_lengths.append(len(self.heldMessages['coin_list'][messageID][0]))
+# 					
 		
-		if len(self.heldMessages['coin_list']) > 0:
-			self.log("{} messages decremented. New block lengths: {}".format(messages_decremented, new_block_lengths))
+	# 	if len(self.heldMessages['coin_list']) > 0:
+# 			self.log("{} messages decremented. New block lengths: {}".format(messages_decremented, new_block_lengths))
+		
+			if len(self.heldMessages['coin_list'][messageID][0]) == 0:
+				lists_released += 1
+				del self.heldMessages['coin_list'][messageID]
+				ReliableBroadcast.handleRBroadcast(self.heldMessages['coin_list'][messageID][1], checkCoinboardMessages=False) #send the message back out and process it
+
+		self.log("{} messages decremented. {} blocks removed. {} lists released.".format(messages_decremented, blocks_removed, lists_released))
 		
 	def clearHeldEpochMessages(self):
 		#called on reset. Removes only epochs that are previous to the current epoch.
@@ -1995,7 +2055,7 @@ def main(args):
 
 			if debug_rb_accept:
 				print "Accepted filtered message: "+repr(adv_message)
-				stdout.flush() #force write
+				#stdout.flush() #force write
 			msgModeTemp = adv_message['body'][0]
 
 			thisInstance = ByzantineAgreement.getInstance(adv_message['meta']['rbid'][2][0]) #= byzID
@@ -2014,6 +2074,7 @@ def main(args):
 		if message is None:
 			if not weSaidNoMessages: #only say 'nobody home' once until we receive messages again.
 				print "No messages."
+				stdout.flush()
 				weSaidNoMessages = True
 			sleep(1) #wait a second before we check again.
 		else:
@@ -2065,7 +2126,7 @@ def main(args):
 						if is_byzantine_related: #type(result['body'][0]) is MessageMode:
 							if debug_rb_accept:
 								print "About to filter accepted message: "+repr(result)
-								stdout.flush() #force write
+								#stdout.flush() #force write
 							
 							#what we need to do here IS: 
 							#strip out everything but the actual message and relevant headers (maybe already done?) - yeah, already done

@@ -34,7 +34,7 @@ default_target = False
 
 all_nodes = []
 
-known_bracha_gameplans = ['none','split_vote','split_hold','force_decide','lie_like_a_rug'] #there was plans to have a gameplan 'shaker' to play with timing but we're not going to implement that
+known_bracha_gameplans = ['none','split_vote','split_hold', 'split_mux', 'force_decide','lie_like_a_rug'] #there was plans to have a gameplan 'shaker' to play with timing but we're not going to implement that
 known_coin_gameplans = ['none','bias','bias_reverse','split']
 
 debug = True
@@ -51,8 +51,10 @@ debug_messages = False
 
 def log(message):
 	if debug:
+		global weSaidNoMessages
+		weSaidNoMessages = False
 		print "ADV {} {}".format(strftime("%H:%M:%S"),message)
-		stdout.flush() #force write
+		#stdout.flush() #force write
 
 
 def maybe_setup_instance(byzID, target=default_target):	
@@ -114,7 +116,7 @@ def setup_iteration(thisIteration, byzID, target_value=None):
 	thisIteration['ignore_coin_messages_from'] = []
 	thisIteration['coin_columns_complete'] = 0
 	thisIteration['good_columns_complete'] = 0
-	thisIteration['nodes_done'] = 0
+	thisIteration['nodes_done'] = [0,0] #for bracha and coin stuff respectively
 	thisIteration['adversary_column_plans_sent'] = False
 	#the following items are DEPRECATED and will become unused.
 	#instances[byzID]['epoch'] = {'bracha':{'value':0, 'timing':0}, 'coin':{'value':0, 'timing':0}}
@@ -221,7 +223,7 @@ def setup_quotas(gameplan, node_message_list, target_value, corrupted_nodes, cor
 		print repr(quota_list[1])
 		return quota_list	
 		
-	if gameplan == "split_hold":
+	if gameplan == "split_hold" or gameplan == "split_mux":
 		
 		quota_list[1] = {}
 		quota_list[2] = {}
@@ -229,6 +231,8 @@ def setup_quotas(gameplan, node_message_list, target_value, corrupted_nodes, cor
 		#the adversary needs two node populations of sizes 2t to pull this off. Let's randomize them - it'll make it easier to check that end-of-wave held message release is working properly. Also, it's something a real adversary might do to make it harder to be detected.
 		wave_one_subsample = random.sample(node_list,max(2*fault_bound, num_nodes // 2 + 1)) #this population might be larger than 2t if t is small
 		wave_two_subsample = random.sample(node_list,2*fault_bound) #this population is always 2t big. We don't want more nodes popping the decide flag.
+		if gameplan == "split_mux":
+			wave_three_subsample = random.sample(node_list,num_nodes // 2) #the nodes on this list get split_vote instead
 		
 		for node in node_list:
 			quota_dir = None
@@ -250,7 +254,12 @@ def setup_quotas(gameplan, node_message_list, target_value, corrupted_nodes, cor
 			if node in wave_two_subsample: #selected to emit Target,True
 				quota_list[2][node[0]] = [majority - (num_nodes // 2 + 1),num_nodes] if target_value else [num_nodes,majority - (num_nodes // 2 + 1)] #ensure target value is emitted (wave 2 ver) WITH deciding flag and our target value
 				
-				quota_list[3][node[0]] = [majority - (fault_bound + 1),fault_bound*2 - 1] 
+				
+				if gameplan == "split_mux" and node in wave_three_subsample:
+					#give split_vote quota instead
+					quota_list[3][node[0]] = [num_nodes,fault_bound - 1] 
+				else:
+					quota_list[3][node[0]] = [majority - (fault_bound + 1),fault_bound*2 - 1] 
 				#wave 3 quotas are strange; instead of determining by value, [False,True]
 				#they determine by the deciding flag being set to [False,True].
 				#so here, we allow up to 2t deciding messages. 
@@ -259,7 +268,15 @@ def setup_quotas(gameplan, node_message_list, target_value, corrupted_nodes, cor
 				#we also subtract 1 from the 'True' side of the wave 3 quota to allow for the counting of the self message.
 			else: #selected to emit any,False
 				quota_list[2][node[0]] = [num_nodes // 2, num_nodes // 2] 
-				quota_list[3][node[0]] = [majority - (fault_bound + 1) - 1,fault_bound*2] 
+				
+				if gameplan == "split_mux" and node in wave_three_subsample:
+					#give split_vote quota instead
+					quota_list[3][node[0]] = [num_nodes,fault_bound]
+					
+					#this won't hang either because: in order for there to be 2t deciding messages, there must be t+1 non-deciding messages. So, if a node receives all the non-decides and at most t decides, it will go split_vote.
+					 
+				else:
+					quota_list[3][node[0]] = [majority - (fault_bound + 1) - 1,fault_bound*2] 
 				#ensure deciding flag IS NOT emitted. We don't care about the values that much.
 				#this can't hang because the number of messages required to progress to the next stage will ALWAYS be less than the number the quota will allow, for t < n/3
 				
@@ -592,7 +609,7 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 			dir_to_change_to = None
 			gameplan_to_load = [None,None,(None,None)]
 		
-			if thisInstance['gameplan'] == 'split_vote' or thisInstance['gameplan'] == 'split_hold':
+			if thisInstance['gameplan'] == 'split_vote' or thisInstance['gameplan'] == 'split_hold' or thisInstance['gameplan'] == 'split_mux':
 				messages_to_change_to_target = max( (fault_bound+2) - values_target, 0 )
 				messages_to_change_to_nontarget = max( (fault_bound+2) - values_nontarget, 0 )
 				
@@ -858,19 +875,20 @@ def handle_bias_adversary_turn(thisIteration):
 
 	if target_dir * thisIteration['coin_balance'] <= 0:
 		#This means the two do not have the same sign, so: the adversary must push to make it work.
-	
-		amount_to_push = 1 - target_dir * thisIteration['coin_balance']	
+		
+		amount_to_push = target_dir - thisIteration['coin_balance']
+		#amount_to_push = 1 - target_dir * thisIteration['coin_balance']	
 		amount_to_push += (0 if even_or_odd == abs(amount_to_push) % 2 else target_dir) #compensate for even/odd
 	
 		log("We have a target of {} and a balance of {}. Applying push of {}.".format(target_dir, thisIteration['coin_balance'], amount_to_push))
 	
-		if amount_to_push > max_coin_influence_total:
+		if abs(amount_to_push) > max_coin_influence_total:
 			log("Warning: I don't have enough influence to properly bias this coin flip. Sorry! (needed {}, max infl. {} [{} per column]).".format(amount_to_push, max_coin_influence_total, max_coin_influence_per_column))
-			simple_adversary_columns(thisIteration, max_coin_influence_total)
-			#print a warning, give up 
-		else:
-			amount_to_push *= target_dir	
-			simple_adversary_columns(thisIteration, amount_to_push)
+			#print a warning, do our best
+			amount_to_push = max_coin_influence_total * target_dir
+
+		simple_adversary_columns(thisIteration, amount_to_push)
+		
 	else:
 		log("We have a target of {} and a balance of {}. Adversarial nodes behave normally.".format(target_dir ,thisIteration['coin_balance']))
 		simple_adversary_columns(thisIteration, 0 if even_or_odd == 0 else (-1 * target_dir))
@@ -885,13 +903,13 @@ def simple_adversary_columns(thisIteration,amount):
 		return
 		#all adv nodes broadcast pure randomness (supplied by the adversary, but still.)
 		
-	log("Coin gameplan for this iteration: columns that sum to {}.".format(amount))	 #test run: amount = -7
+	log("Coin gameplan for this iteration: columns that sum to {}.".format(amount))	 #test run: amount = -8
 		
 	even_or_odd_per_column = num_nodes % 2 	#test run: 10 % 2 = 0
 		
 	nodes_to_distribute_to = num_nodes_overtaken(thisIteration) #test run: t = 3
 	
-	even_amount = abs(amount) // nodes_to_distribute_to #test run: 7 // 3 = 2
+	even_amount = abs(amount) // nodes_to_distribute_to #test run: 8 // 3 = 2
 	#2 % 2 = 0
 	
 	if even_amount % 2 != even_or_odd_per_column: 
@@ -900,11 +918,16 @@ def simple_adversary_columns(thisIteration,amount):
 	# integer division (//) uses floor(), effectively, which has some funny results when dividing a negative number. This works around that.
 	
 	
-	leftover_count = abs((amount - even_amount*nodes_to_distribute_to)/2) #how many nodes get extras?
+	leftover_count = abs((amount - even_amount*nodes_to_distribute_to)//2) #how many nodes get extras?
+	#leftover count = abs(( -8 - (-2*3) ) /2 )
+	log("Leftover influence: {}".format(int(leftover_count)))
+	
 	
 	if (amount - even_amount*nodes_to_distribute_to) % 2 == 1:
 		log("Uh-oh. An uneven amount of leftover influence is being supplied to adversarial columns. Fixing this, but it typically indicates a bug in the code.")	
-		leftover_count = int(leftover_count+.5) #this is a fix to keep things going, but really should have been handled up the chain	
+		leftover_count = int(leftover_count+1) #this is a fix to keep things going, but really should have been handled up the chain	
+	#else:
+	#	leftover_count = int(leftover_count) #turns out the division makes this a float. Ew!
 	
 	if leftover_count != 0:
 		ordering = random.sample(range(nodes_to_distribute_to),nodes_to_distribute_to)
@@ -915,11 +938,13 @@ def simple_adversary_columns(thisIteration,amount):
 				adversary_column(node, thisIteration, max_coin_influence_per_column * (1 if even_amount >= 0 else -1))
 			return
 		
+		these_nodes = get_nodes_overtaken(thisIteration) #bofa deez nodes
+		
 		for node in ordering[0:leftover_count]: #the first x nodes get the leftover
-			adversary_column(node, thisIteration, even_amount+(2 if even_amount > 0 else -2))
+			adversary_column(these_nodes[node], thisIteration, even_amount+(2 if even_amount > 0 else -2))
 			
 		for node in ordering[leftover_count:]:
-			adversary_column(node, thisIteration, even_amount)
+			adversary_column(these_nodes[node], thisIteration, even_amount)
 			
 	else:
 		if abs(even_amount) > max_coin_influence_per_column: 
@@ -1029,7 +1054,7 @@ def process_coin_message_value(message,thisInstance):#rbid,thisInstance):
 					thisIteration['held_messages']['coin_initial'] = thisIteration['held_messages']['coin_initial'][:held_len - num_messages_to_corrupt]
 					
 					for junkMessage in messages_to_discard:
-						maybe_overtake_node(thisInstance, get_message_sender(junkMessage))
+						maybe_overtake_node(get_message_ID(junkMessage), get_message_sender(junkMessage))
 				
 				sender_log_list = []
 				
@@ -1315,7 +1340,7 @@ def process_message(message, reprocess=False):
 def main(args):
 	#args = [[my user ID, the number of nodes]]. For the time being, we're not passing around node IDs but eventually we WILL need everyone to know all the node ids.
 	print "Starting up..."
-	global num_nodes, fault_bound, majority, minority_bound, max_coin_influence_per_column, max_coin_influence_total, all_nodes, instances, random_generator
+	global num_nodes, fault_bound, majority, minority_bound, max_coin_influence_per_column, max_coin_influence_total, all_nodes, instances, random_generator, weSaidNoMessages
 	
 	try:
 		random_generator = random.SystemRandom()
@@ -1355,11 +1380,10 @@ def main(args):
 		if adv_message is None:
 			if not weSaidNoMessages: #only say 'nobody home' once until we receive messages again.
 				print "No messages."
+				stdout.flush()
 				weSaidNoMessages = True
 			sleep(1) #wait a second before we check again.
-		else:
-			weSaidNoMessages = False
-				
+		else:		
 			process_message(adv_message)
 
 	

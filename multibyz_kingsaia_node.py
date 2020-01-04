@@ -104,7 +104,7 @@ class ReliableBroadcast: # pylint: disable=no-init
 		if debug_rb:
 			global username
 			print "[{}:{}] {}".format(strftime("%H:%M:%S"),username,message)
-			stdout.flush() #force write
+			#stdout.flush() #force write
 	
 		
 	
