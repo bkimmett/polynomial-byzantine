@@ -171,6 +171,9 @@ def main(args):
 						
 						print "Nodes true: {}".format(random_node_order[:numTrue])
 						print "Nodes false: {}".format(random_node_order[numTrue:numTrue+numFalse])
+
+						rand_nodes_true = []
+						rand_nodes_false = []
 						
 						for node in random_node_order[:numTrue]:
 							MessageHandler.send(True,{'code':'byzantine','byzID':byz_id},node)
@@ -179,7 +182,17 @@ def main(args):
 							MessageHandler.send(False,{'code':'byzantine','byzID':byz_id},node)	
 							
 						for node in random_node_order[numTrue+numFalse:]:
-							MessageHandler.send(random_generator.random() >= .5,{'code':'byzantine','byzID':byz_id},node)	
+							flip = (random_generator.random() >= .5)
+							MessageHandler.send(flip,{'code':'byzantine','byzID':byz_id},node)
+							
+							if flip:
+								rand_nodes_true.append(node)
+							else:
+								rand_nodes_false.append(node)
+						
+						if len(random_node_order[numTrue+numFalse:]) > 0:
+							print "RNG Nodes true: {}".format(rand_nodes_true)
+							print "RNG Nodes false: {}".format(rand_nodes_false)
 						
 						
 						#MessageHandler.send(message3,dest,{'code':'broadcast'})

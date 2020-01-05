@@ -190,12 +190,15 @@ class ReliableBroadcast: # pylint: disable=no-init
 		
 		is_byzantine_related = False
 		
-		try:
-			if len(data) > 0:
-				if data[0] == MessageMode.coin_flip or data[0] == MessageMode.coin_list or data[0] == MessageMode.coin_ack or data[0] == MessageMode.bracha:
-					is_byzantine_related = True #probably true, anyway. Sadly, I'm doing the old C way of comparing to an obscured constant as opposed to a class instance, because the serialization method (JSON) I'm using can't send objects/custom data types. And switching to an upgraded serializer (pickle) would be flagrantly insecure, to where it would be REALLY EASY for an adversary to take over every node at once by sending a malicious broadcast message. Ripperoni.
-		except TypeError:
-			pass #it's not byzantine
+		if isinstance(data,collections.Sequence) and len(data) > 0 and (data[0] == MessageMode.coin_flip or data[0] == MessageMode.coin_list or data[0] == MessageMode.coin_ack or data[0] == MessageMode.bracha):
+			is_byzantine_related = True
+		
+		# try:
+# 			if len(data) > 0:
+# 				if data[0] == MessageMode.coin_flip or data[0] == MessageMode.coin_list or data[0] == MessageMode.coin_ack or data[0] == MessageMode.bracha:
+# 					is_byzantine_related = True #probably true, anyway. Sadly, I'm doing the old C way of comparing to an obscured constant as opposed to a class instance, because the serialization method (JSON) I'm using can't send objects/custom data types. And switching to an upgraded serializer (pickle) would be flagrantly insecure, to where it would be REALLY EASY for an adversary to take over every node at once by sending a malicious broadcast message. Ripperoni.
+# 		except TypeError:
+# 			pass #it's not byzantine
 			
 		###try:
 		if is_byzantine_related and (data[0] == MessageMode.coin_flip or data[0] == MessageMode.coin_list):
@@ -274,15 +277,16 @@ class ReliableBroadcast: # pylint: disable=no-init
 			return None
 			
 			
-		if thisClass.checkRbroadcastEcho(data,rbid,uid): #runs 'check message' until it decides we're done handling any sort of necessary sending	
+		if thisClass.checkRbroadcastEcho(data,message['meta'],uid): #runs 'check message' until it decides we're done handling any sort of necessary sending	
 			return message #original packed message is fastballed back towards the client, as the validate functions the client will pass it on to use packed format
 			
 		return None
 	
 	@classmethod
-	def checkRbroadcastEcho(thisClass,data,rbid,uid):
+	def checkRbroadcastEcho(thisClass,data,meta,uid):
 		
 		#TODO: A concern - (num_nodes + fault_bound) / 2 on a noninteger fault_bound?
+		#no, we want floats here.
 		
 		#BROADCAST FORMAT:
 		#MessageHandler.sendAll(message,{'phase':RBPhase.initial,'rbid':(username,message_counter,extraMeta)})
@@ -292,7 +296,7 @@ class ReliableBroadcast: # pylint: disable=no-init
 			if thisClass.broadcasting_echoes[uid][0] or len(thisClass.broadcasting_echoes[uid][1]) >= (thisClass.num_nodes + thisClass.fault_bound) / 2 or len(thisClass.broadcasting_echoes[uid][2]) >= thisClass.fault_bound + 1: #one initial OR (n+t)/2 echoes OR t+1 readies
 				#ECHO!
 				thisClass.log("SENDING ECHO reliable broadcast message for key < {} > to all.".format(repr(data)))
-				MessageHandler.sendAll(data,{'phase':thisClass.RBPhase.echo,'rbid':rbid})
+				MessageHandler.sendAll(data,{'phase':thisClass.RBPhase.echo,'rbid':meta['rbid']})
 				#MessageHandler.sendAll(("rBroadcast","echo",data,None)) 
 				#4th item in message is debug info
 				thisClass.broadcasting_echoes[uid][3] = thisClass.RBPhase.echo #update node phase
@@ -304,7 +308,7 @@ class ReliableBroadcast: # pylint: disable=no-init
 			if len(thisClass.broadcasting_echoes[uid][1]) >= (thisClass.num_nodes + thisClass.fault_bound) / 2 or len(thisClass.broadcasting_echoes[uid][2]) >= thisClass.fault_bound + 1: #(n+t)/2 echoes OR t+1 readies
 				#READY!
 				thisClass.log("SENDING READY reliable broadcast message for key < {} > to all.".format(repr(data)))
-				MessageHandler.sendAll(data,{'phase':thisClass.RBPhase.ready,'rbid':rbid})
+				MessageHandler.sendAll(data,{'phase':thisClass.RBPhase.ready,'rbid':meta['rbid']})
 				#MessageHandler.sendAll(("rBroadcast","ready",data,None)) #message format: type, [phase, data, debuginfo]
 				thisClass.broadcasting_echoes[uid][3] = thisClass.RBPhase.ready #update node phase
 			else:
@@ -315,7 +319,7 @@ class ReliableBroadcast: # pylint: disable=no-init
 			if len(thisClass.broadcasting_echoes[uid][2]) >= thisClass.num_nodes - thisClass.fault_bound: #thisClass.fault_bound*2 + 1: #2t+1 readies only
 				#ACCEPT!
 				thisClass.broadcasting_echoes[uid][3] = thisClass.RBPhase.done
-				return thisClass.acceptRbroadcast(data,rbid)
+				return thisClass.acceptRbroadcast(data,meta)
 			#otherwise...
 			#print "Not accepting, {} of {} messages.".format(thisClass.broadcasting_echoes[uid][2],thisClass.fault_bound*2+1)
 			else:
@@ -328,7 +332,44 @@ class ReliableBroadcast: # pylint: disable=no-init
 
 	
 	@classmethod
-	def acceptRbroadcast(thisClass,data,rbid):	# pylint: disable=unused-argument
+	def acceptRbroadcast(thisClass,data,meta):	# pylint: disable=unused-argument
+		
+		is_byzantine_related = False
+		if isinstance(data,collections.Sequence) and len(data) > 0 and (data[0] == MessageMode.coin_flip or data[0] == MessageMode.coin_list or data[0] == MessageMode.coin_ack or data[0] == MessageMode.bracha):
+			is_byzantine_related = True
+		
+		if is_byzantine_related: #type(result['body'][0]) is MessageMode:
+			if debug_rb_accept:
+				print "About to accept reliable broadcast from {}: {}. Adversary may still intervene.".format(meta['rbid'][0],data)
+				#stdout.flush() #force write
+			msgModeTemp = data[0]
+			#what we need to do here IS: 
+			#strip out everything but the actual message and relevant headers (maybe already done?) - yeah, already done
+			#figure out WHICH BYZANTINE INSTANCE the message belongs to
+			thisInstance = ByzantineAgreement.getInstance(meta['rbid'][2][0]) #= byzID
+			
+			if thisInstance is None: #instance not gotten
+				return #get outta here
+			
+			
+			#now the message goes to the adversary for filtering.
+			MessageHandler.sendToAdversary(data,meta,type_override='timing')
+			
+			#This was copied from the original node script. It may need some work replacing. The adversary version, which sends it to ADV first, is above.
+			
+			# take that instance and kick this to it
+# 			if msgModeTemp == MessageMode.bracha:
+# 				thisInstance.validateBrachaMsg(result)
+# 				
+# 				#TODO call bracha message verify function
+# 			elif msgModeTemp == MessageMode.coin_flip or msgModeTemp == MessageMode.coin_flip or msgModeTemp == MessageMode.coin_ack:
+# 				thisInstance.validateCoinMsg(result)
+# 				#TODO call coin input message verify function
+		else:
+			#If it's a message without a MessageMode, we just print it.
+			print "Accepted reliable broadcast from {}: {}".format(meta['rbid'][0],data)
+							
+		
 		return True #data,rbid
 		#what does accepting a r-broadcasted message LOOK like? Well, the message is confirmed to be broadcast, and is passed on to the other parts of the program.
 		
@@ -2122,33 +2163,34 @@ def main(args):
 				#msgType = message['body'][0]
 				#if msgType == "rBroadcast":
 				if 'phase' in message['meta'] and 'rbid' in message['meta']: #indicating a reliable broadcast message
-					result = ReliableBroadcast.handleRBroadcast(message)
-					if result is not None:
-						#result from Accept. Do stuff.
-						is_byzantine_related = False
-						if isinstance(result['body'][0],collections.Sequence) and len(result['body']) > 0 and (result['body'][0] == MessageMode.coin_flip or result['body'][0] == MessageMode.coin_list or result['body'][0] == MessageMode.coin_ack or result['body'][0] == MessageMode.bracha):
-							is_byzantine_related = True
-						
-						if is_byzantine_related: #type(result['body'][0]) is MessageMode:
-							if debug_rb_accept:
-								print "About to filter accepted message: "+repr(result)
-								#stdout.flush() #force write
-							
-							#what we need to do here IS: 
-							#strip out everything but the actual message and relevant headers (maybe already done?) - yeah, already done
-							#figure out WHICH BYZANTINE INSTANCE the message belongs to
-							thisInstance = ByzantineAgreement.getInstance(result['meta']['rbid'][2][0]) #= byzID
-							
-							if thisInstance is None: #instance not gotten
-								continue #get outta here
-							
-							#now the message goes to the adversary for filtering.
-							MessageHandler.sendToAdversary(result['body'],result['meta'],type_override='timing')
-							
-					
-						else:
-							#If it's a message without a MessageMode, we just print it.
-							print "Accepted reliable broadcast from {}: {}".format(message['meta']['rbid'][0],message['body'])
+					ReliableBroadcast.handleRBroadcast(message)
+					#result = ReliableBroadcast.handleRBroadcast(message)
+					# if result is not None:
+# 						#result from Accept. Do stuff.
+# 						is_byzantine_related = False
+# 						if isinstance(result['body'][0],collections.Sequence) and len(result['body']) > 0 and (result['body'][0] == MessageMode.coin_flip or result['body'][0] == MessageMode.coin_list or result['body'][0] == MessageMode.coin_ack or result['body'][0] == MessageMode.bracha):
+# 							is_byzantine_related = True
+# 						
+# 						if is_byzantine_related: #type(result['body'][0]) is MessageMode:
+# 							if debug_rb_accept:
+# 								print "About to filter accepted message: "+repr(result)
+# 								#stdout.flush() #force write
+# 							
+# 							#what we need to do here IS: 
+# 							#strip out everything but the actual message and relevant headers (maybe already done?) - yeah, already done
+# 							#figure out WHICH BYZANTINE INSTANCE the message belongs to
+# 							thisInstance = ByzantineAgreement.getInstance(result['meta']['rbid'][2][0]) #= byzID
+# 							
+# 							if thisInstance is None: #instance not gotten
+# 								continue #get outta here
+# 							
+# 							#now the message goes to the adversary for filtering.
+# 							MessageHandler.sendToAdversary(result['body'],result['meta'],type_override='timing')
+# 							
+# 					
+# 						else:
+# 							#If it's a message without a MessageMode, we just print it.
+# 							print "Accepted reliable broadcast from {}: {}".format(message['meta']['rbid'][0],message['body'])
 							
 				else:
 					print "Unknown node message received."

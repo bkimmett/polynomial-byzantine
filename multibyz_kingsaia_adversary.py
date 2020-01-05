@@ -25,6 +25,8 @@ from multibyz_kingsaia_node_adversary import MessageMode
 # All of the communications of the implementation use Reliable Broadcast. Which is remarkably difficult to interfere with... which is kind of the point. So, to simulate it, we have each node add an extra step before it accepts a Reliable Broadcast message.
 # The extra step is: the node sends its ID, along with the message it was about to accept, to the simulated adversary. The simulated adversary can choose to return it now (indicating no delay), return it later (indicating delay), or change it (which means the adversary has taken over the original sender of the node and now can broadcast whatever it wants, but is pretending to be normal)
 
+defer_in_unwinnable_situations = True
+#By default, if all good nodes are unanimous, the adversary knows it can't do anything so it'll give up. Set this to 'False' to have the adversary try to still intervene if all good nodes are unanimous anyway. This could be used when testing bracha, for example.
 
 instances = {}
 current_master_gameplan_bracha = None
@@ -520,6 +522,16 @@ def maybe_change_bracha_message(message, new_value, skip_nonadversarial=False):
 	#altered_message, success = maybe_change_message(message, updated_body) #overwrite message, if possible				
 	return maybe_change_message(message, updated_body, only_if_node_already_overtaken=skip_nonadversarial) #overwrite message, if possible
 
+def are_we_stuck(node_distribution, thisIteration):
+	#we only have to check the minority node distribution. If all of them are adversarial, then all good nodes are unanimous.
+	minority_nodes = node_distribution[0] if len(node_distribution[0]) <= len(node_distribution[1]) else node_distribution[1]
+	
+	for node in minority_nodes:
+		if not node_is_overtaken(thisIteration['ID'], node):
+			return False #we're good to go!
+			
+	return True #uh-oh.
+
 def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 	##KNOWN GAMEPLANS: split_vote, split_hold, force_decide, shaker, lie_like_a_rug:
 	##'split_hold' = arrange matters so that a global-coin flip happens, but some/all nodes (maybe justthe ones with the adv. target value) keep their value instead. 
@@ -589,25 +601,32 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 			#yeah, yeah, I know. The adversary for a fault-tolerant system isn't fault-tolerant itself! It's ironic, isn't it?
 	
 			#so: we're altering the values of wave 1 messages.
-			#how many nodes are already on our side?
 			log("About to process held wave 1 value messages.")
-			values_target = len(thisIteration['wave_one_bracha_values'][1 if thisInstance['target_value'] else 0])
-			#how many nodes are against us?
-			values_nontarget = len(thisIteration['wave_one_bracha_values'][0 if thisInstance['target_value'] else 1])
-		
-			if values_target == 0 or values_nontarget == 0:
-				#if EVERY node has the same value, the adversary can't do anything. Give up as a convenience measure - otherwise, the experimenter would have to use an 'adv_release' command to continue the iteration if it were under a split_vote or split_hold gameplan (the adversary would make it hang with its indefinite holds).
-				log("Every node is unanimous. Taking no action for this iteration (gameplans from past iterations may carry over for Wave 2/3, but won't have any effect on the outcome).")
-				for thisMessage in thisIteration['held_messages']['wave1_wait']:
-					return_value_message(thisMessage) #return all messages
+			
+			if are_we_stuck(thisIteration['wave_one_bracha_values'], thisIteration): 
+				#if EVERY good node has the same value, the adversary can't do anything. Give up as a convenience measure - otherwise, the experimenter would have to use an 'adv_release' command to continue the iteration if it were under a split_vote or split_hold gameplan (the adversary would make it hang with its indefinite holds).
 				
-				thisIteration['timing_quotas'] = None #quotas can't change anything either, so don't add any
-				return
+				if defer_in_unwinnable_situations:
+					log("Every good node is unanimous. Taking no action for this iteration (gameplans from past iterations may carry over for Wave 2/3, but won't have any effect on the outcome).")
+					log("To the experimenter: If this is undesirable behavior for you, set 'defer_in_unwinnable_situations', at the top of the adversary script file, to False.")
+					for thisMessage in thisIteration['held_messages']['wave1_wait']:
+						return_value_message(thisMessage) #return all messages
 				
+					thisIteration['timing_quotas'] = None #quotas can't change anything either, so don't add any
+					return
+				else:
+					log("Every good node is unanimous. You'll need to use the 'adv_release' client command to get the iteration to continue, and I won't be able to affect its outcome.")
+					log("To the experimenter: If you'd prefer I autodetect situations like this and give up gracefully, set 'defer_in_unwinnable_situations', at the top of the adversary script file, to True.")
 		
 			messages_to_change = 0
 			dir_to_change_to = None
 			gameplan_to_load = [None,None,(None,None)]
+		
+			#how many nodes are already on our side?
+			values_target = len(thisIteration['wave_one_bracha_values'][1 if thisInstance['target_value'] else 0])
+			#how many nodes are against us?
+			values_nontarget = len(thisIteration['wave_one_bracha_values'][0 if thisInstance['target_value'] else 1])
+		
 		
 			if thisInstance['gameplan'] == 'split_vote' or thisInstance['gameplan'] == 'split_hold' or thisInstance['gameplan'] == 'split_mux':
 				messages_to_change_to_target = max( (fault_bound+2) - values_target, 0 )
