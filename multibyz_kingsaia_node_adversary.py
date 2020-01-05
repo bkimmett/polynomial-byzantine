@@ -19,8 +19,8 @@ from blist import blist 		#containers that offer better performance when they ge
 
 #debug logging
 
-debug_rb = True
-debug_rb_coin = True
+debug_rb = False
+debug_rb_coin = False
 debug_rb_accept = True
 debug_byz = True
 debug_show_coinboards = True
@@ -318,7 +318,8 @@ class ReliableBroadcast: # pylint: disable=no-init
 				return thisClass.acceptRbroadcast(data,rbid)
 			#otherwise...
 			#print "Not accepting, {} of {} messages.".format(thisClass.broadcasting_echoes[uid][2],thisClass.fault_bound*2+1)
-			return False #wait for more messages!
+			else:
+				return False #wait for more messages!
 		
 		if thisClass.broadcasting_echoes[uid][3] == thisClass.RBPhase.done:
 			return False #we've already accepted this. no further processing.
@@ -1569,6 +1570,8 @@ class ByzantineAgreement:
 		#this releases held coin list messages given that the i and j have just been received here. 
 		if len(self.heldMessages['coin_list']) > 0:
 			self.log("Clearing held coin list items for this message.")
+		else:
+			return #nothing to clear out
 		
 		messages_decremented = 0
 		blocks_removed = 0
@@ -1599,7 +1602,10 @@ class ByzantineAgreement:
 				del self.heldMessages['coin_list'][messageID]
 				ReliableBroadcast.handleRBroadcast(self.heldMessages['coin_list'][messageID][1], checkCoinboardMessages=False) #send the message back out and process it
 
-		self.log("{} messages decremented. {} blocks removed. {} lists released.".format(messages_decremented, blocks_removed, lists_released))
+		if messages_decremented > 0 or blocks_removed > 0 or lists_released > 0:
+			self.log("{} messages decremented. {} blocks removed. {} lists released.".format(messages_decremented, blocks_removed, lists_released))
+		else:
+			self.log("No changes.")
 		
 	def clearHeldEpochMessages(self):
 		#called on reset. Removes only epochs that are previous to the current epoch.
