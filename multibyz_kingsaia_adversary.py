@@ -453,10 +453,10 @@ def release_messages(thisIteration, key): #, message_processor):
 def node_is_overtaken(instancename, nodename):
 	return nodename in instances[instancename]['fault_list']	
 	
-def send_node_gameplans(instance, nodename, plan, type="gameplan_bracha"):
+def send_node_gameplans(instance, nodename, plan, type="gameplan_bracha", dont_react=False):
 	if maybe_overtake_node(instance, nodename):
 		log("[{}] Sending gameplan {} to node {}.".format(instance,plan,nodename))
-		MessageHandler.send([type, instance, plan], None, nodename, type_override='adversary_command')
+		MessageHandler.send([type, instance, plan, dont_react], None, nodename, type_override='adversary_command')
 		return True
 	
 	return False #we couldn't overtake this node, so no send
@@ -637,7 +637,7 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 				elif messages_to_change_to_target == 0 and messages_to_change_to_nontarget > 0:
 					gameplan_to_load = [not thisInstance['target_value'], None, None]
 				else:
-					pass #no changes
+					gameplan_to_load = [None, None, None] #no changes
 				
 				#make sure there's at least t+1 of each for split_vote or split_hold
 				#try to get t+2 if we can tho - this'll allow for nodes that recognize their own message being altered and reject it to still see t+1 of each type
@@ -909,7 +909,7 @@ def handle_bias_adversary_turn(thisIteration):
 		simple_adversary_columns(thisIteration, amount_to_push)
 		
 	else:
-		log("We have a target of {} and a balance of {}. Adversarial nodes behave normally.".format(target_dir ,thisIteration['coin_balance']))
+		log("We have a balance of {} and a target of {}. Adversarial nodes behave normally.".format( thisIteration['coin_balance'],target_dir))
 		simple_adversary_columns(thisIteration, 0 if even_or_odd == 0 else (-1 * target_dir))
 
 def simple_adversary_columns(thisIteration,amount):
@@ -922,18 +922,18 @@ def simple_adversary_columns(thisIteration,amount):
 		return
 		#all adv nodes broadcast pure randomness (supplied by the adversary, but still.)
 		
-	log("Coin gameplan for this iteration: columns that sum to {}.".format(amount))	 #test run: amount = -8
+	log("Coin gameplan for this iteration: columns that sum to {}.".format(amount))	 #test run: amount = 2
 		
 	even_or_odd_per_column = num_nodes % 2 	#test run: 10 % 2 = 0
 		
 	nodes_to_distribute_to = num_nodes_overtaken(thisIteration) #test run: t = 3
 	
-	even_amount = abs(amount) // nodes_to_distribute_to #test run: 8 // 3 = 2
+	even_amount = abs(amount) // nodes_to_distribute_to #test run: 2 // 3 = 0
 	#2 % 2 = 0
 	
 	if even_amount % 2 != even_or_odd_per_column: 
 		even_amount -= 1 #this doesn't trigger
-	even_amount *= (1 if amount >= 0 else -1) #even amount now = -2
+	even_amount *= (1 if amount >= 0 else -1) #even amount now = 0
 	# integer division (//) uses floor(), effectively, which has some funny results when dividing a negative number. This works around that.
 	
 	
@@ -960,7 +960,7 @@ def simple_adversary_columns(thisIteration,amount):
 		these_nodes = get_nodes_overtaken(thisIteration) #bofa deez nodes
 		
 		for node in ordering[0:leftover_count]: #the first x nodes get the leftover
-			adversary_column(these_nodes[node], thisIteration, even_amount+(2 if even_amount > 0 else -2))
+			adversary_column(these_nodes[node], thisIteration, even_amount+(2 if even_amount >= 0 else -2))
 			
 		for node in ordering[leftover_count:]:
 			adversary_column(these_nodes[node], thisIteration, even_amount)
@@ -1074,7 +1074,10 @@ def process_coin_message_value(message,thisInstance):#rbid,thisInstance):
 					
 					for junkMessage in messages_to_discard:
 						maybe_overtake_node(get_message_ID(junkMessage), get_message_sender(junkMessage))
-				
+						send_node_gameplans(get_message_ID(junkMessage), get_message_sender(junkMessage), [None, None, None], dont_react=True)
+						#If we overtake a node _here_, we need to set a Bracha gameplan. Let's set [None, None, None] so that the node acts naturally (we'll re-evaluate later when the next wave 1 bracha messages come in).
+						#no already-adversarial node will be in this list, because they pause for instructions before sending coin messages.
+						#the 'dont_react' makes sure the node's usual behavior on receiving a gameplan - to resend a bracha message - doesn't happen.
 				sender_log_list = []
 				
 				for message_releasing in messages_to_release:

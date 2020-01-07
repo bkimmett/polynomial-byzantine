@@ -2199,21 +2199,22 @@ def main(args):
 				#adversarial override - TO DO
 				if message['body'][0] == "gameplan_bracha" or message['body'][0] == "gameplan_coin":
 					thisInstance = ByzantineAgreement.getInstance(message['body'][1])
-					
+					set_silently = message['body'][3]
 					
 					print "I'm corrupted for iteration {} now. Gameplan: {}.".format(message['body'][1], message['body'][2])
 					thisInstance.corrupted = True #Having a gameplan also bypasses certain message validation sequences. This is determined by this flag.
 					if message['body'][0] == "gameplan_bracha":
 						thisInstance.bracha_gameplan = message['body'][2]
-						thisInstance._startBracha() #start over with wave 1 message; adversary will toss not-yet-corrupted messages
+						if not set_silently:
+							thisInstance._startBracha() #start over with wave 1 message; adversary will toss not-yet-corrupted messages
 					elif message['body'][0] == "gameplan_coin":
 						thisInstance.coin_gameplan = message['body'][2]
 						#if the node is already corrupted it will WAIT for this message to start sending coin flips
 						#so previous calls to broadcast(0) will return None and no coin is broadcast
 						#so we just broadcast now
 						#if the node IS NOT corrupted and became corrupted, the broadcasted message will be discarded by the adversary. So we can rebroadcast our last coin broadcast.
-						
-						thisInstance._broadcastCoin(thisInstance.lastCoinBroadcast)
+						if not set_silently:
+							thisInstance._broadcastCoin(thisInstance.lastCoinBroadcast)
 						
 					
 					#gameplan format for corrupted nodes:

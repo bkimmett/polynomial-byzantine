@@ -6,7 +6,7 @@ from sys import argv, exit, stdout 		#utility
 from time import sleep, strftime 	#to wait for messages, and for logging
 from math import floor, sqrt, log 			#utility
 from copy import deepcopy 		#utility
-import numpy as np 				#for matrix operations in _processEpoch
+#import numpy as np 				#for matrix operations in _processEpoch
 from json import dumps			#for making UIDs good
 import multibyz_kingsaia_network as MessageHandler 
 #getting an error with the above line? 'pip install kombu'
