@@ -424,7 +424,7 @@ class ByzantineAgreement:
 		#ASSUMPTION: For now, value should be True or False: a single-valued byzantine thing.
 		
 		
-		self.heldMessages = {'epoch':{}, 'iteration':{}, 'wave':{2:[[],[]], 3:[[],[]]}, 'coin_epoch':{}, 'coin_epoch_accepted':{}, 'coin_iteration':{}, 'coin_iteration_accepted':{}, 'coin_flip':{}, 'coin_list':[]}
+		self.heldMessages = {'epoch':{}, 'iteration':{}, 'wave':{2:[[],[]], 3:[[],[],[]]}, 'coin_epoch':{}, 'coin_epoch_accepted':{}, 'coin_iteration':{}, 'coin_iteration_accepted':{}, 'coin_flip':{}, 'coin_list':[]}
 		#held wave 3 messages are deciding messages.
 		
 		self.decided = False
@@ -683,7 +683,7 @@ class ByzantineAgreement:
 				if self.num_nodes - sum(self.brachaMsgCtrTotal[0]) + self.brachaMsgCtrTotal[0][1 if msgValue else 0] >= self.initial_validation_bound:
 					#...but we COULD hit it later.
 					self.log("Holding uncertain wave 2 bracha message from {}, might not have enough wave 1 messages to validate {}.".format(rbid[0],msgValue))
-					self.holdForLaterWave(message, 2, msgValue) #needs self.initial_validation_bound messages of same type to release
+					self.holdForLaterWave(message, 2, 1 if msgValue else 0) #needs self.initial_validation_bound messages of same type to release
 						#self.initial_validation_bound - self.brachaMsgCtrTotal[0][1 if msgValue else 0])
 					return
 				else:
@@ -702,7 +702,7 @@ class ByzantineAgreement:
 					self.holdForLaterWaveSpecial(message,rbid[0])
 					return
 			
-				if msgValue != self.brachabits[rbid[0]][2] or self.brachaMsgCtrTotal[1][1 if msgValue else 0] >= self.num_nodes // 2 + self.fault_bound + 1:
+				if msgValue != self.brachabits[rbid[0]][2] or max(self.brachaMsgCtrTotal[1]) >= self.num_nodes // 2 + self.fault_bound + 1:
 					#basically, if 'decide' is false, two things must be true:
 					#1. The node must have the same value as its Wave 2 message.
 					#2A. There must not be more than n//2 + t nodes that have a specific value in their wave 2 message, as if there were, such a hypermajority would force the node to set 'decide' to true and their value to that value.
@@ -710,6 +710,12 @@ class ByzantineAgreement:
 					self.log("Discarding unvalidateable wave 3 bracha message from {}, sender is not deciding and {} {}.".format(rbid[0], "changed value to" if msgValue != self.brachabits[rbid[0]][2] else "would be forced to decide", msgValue))
 					#TODO: Maybe blacklist here?
 					return
+				elif self.num_nodes - sum(self.brachaMsgCtrTotal[1]) + max(self.brachaMsgCtrTotal[1]) >= self.num_nodes // 2 + self.fault_bound + 1:
+					#it's still possible for it to fail
+					self.log("Holding uncertain non-deciding wave 3 bracha message from {}, not enough wave 2 messages to validate.".format(rbid[0],msgValue))
+					self.holdForLaterWave(message, 3, 2) #the '2' in msgValue shunts it into the non-decide box.
+				else:
+					pass #it's OK
 			
 			if msgDecide and self.brachaMsgCtrTotal[1][1 if msgValue else 0] <= self.num_nodes // 2:
 				#message isn't valid - we haven't received enough appropriate wave 2 messages.
@@ -717,7 +723,7 @@ class ByzantineAgreement:
 				if self.num_nodes - sum(self.brachaMsgCtrTotal[1]) + self.brachaMsgCtrTotal[1][1 if msgValue else 0] > self.num_nodes // 2:
 					#...but we COULD hit it later.
 					self.log("Holding uncertain wave 3 bracha message from {}, might not have enough wave 2 messages to validate {}.".format(rbid[0],msgValue))
-					self.holdForLaterWave(message, 3, msgValue) #(self.num_nodes // 2 + 1) - self.brachaMsgCtrTotal[1][1 if msgValue else 0]) #second number is minimum number of messages needed before recheck 
+					self.holdForLaterWave(message, 3, 1 if msgValue else 0) #(self.num_nodes // 2 + 1) - self.brachaMsgCtrTotal[1][1 if msgValue else 0]) #second number is minimum number of messages needed before recheck 
 					return
 				else:
 					#...and we're not going to be able to hit it in this go-round.
@@ -1356,7 +1362,7 @@ class ByzantineAgreement:
 		#new ver just recalculates the number of messages needed at time and releases all.
 		#saving a message until later. Fish saved messages out with checkHeldWaveMessages.
 		#old ver	#self.heldMessages['wave'][wave].add( (sum(self.brachaMsgCtrTotal[wave-1])+number_messages_needed, message) )
-		self.heldMessages['wave'][wave][1 if msgValue else 0].append(message)
+		self.heldMessages['wave'][wave][msgValue].append(message)
 		#the 'number_messages_needed' at the front - this number will only go DOWN as we receive more wave2/wave3 messages. (this works because held wave messages are wiped at the start of a new iteration) So the list is sorted in reverse order of the number of messages needed, and when we get a new message we just have to check the number of messages received and we're fine.
 		
 		#so we're putting (total messages received so far) + (num messages needed) at the front of each message. And when (total messages received) is >= that number, you pop the message.
@@ -1543,6 +1549,8 @@ class ByzantineAgreement:
 			
 		elif wave == 3:
 			messages_needed = self.num_nodes // 2 + 1
+			messages_additional = ((self.num_nodes - self.fault_bound) - self.num_nodes // 2) * 2
+			# we need there to be no supermajorities of (n//2 + t + 1) of any type. So we need twice (n - (n//2 + t)) messages of each type to ensure that there's enough 
 			messages_found = self.brachaMsgCtrTotal[1]
 		else:
 			pass #TODO: throw error. Programmer screwup.
@@ -1561,7 +1569,16 @@ class ByzantineAgreement:
 							self.log("Throwing out {} unvalidateable wave 3 messages. This is indicative of probable adversary activity.".format(lmessages))
 					self.heldMessages['wave'][wave][1-i] = [] #if we successfully processed one bucket of wave 3 messages, then the other bucket, if any, are invalid (because you can't have a majority of the other message if you had a majority of this one). So throw those out.
 					break
-			
+		
+		if wave == 3:
+			#also check non-deciding wave 3 messages
+			if sum(messages_found) >= messages_additional:
+		    	#copy and clear held messages, because calling Validate on all of these has a chance to dump them all back in here
+		    	messages_to_revalidate = self.heldMessages['wave'][wave][2]
+		    	self.heldMessages['wave'][wave][2] = []
+		    	
+		    	for message in messages_to_revalidate:
+		    		self.validateBrachaMsg(message)
 			
 	
 		#TODO: This doesn't work. Messages can get put back in the late-wave bucket because the number of messages needed is just a minimum.
@@ -1640,8 +1657,9 @@ class ByzantineAgreement:
 		
 			if len(self.heldMessages['coin_list'][messageID][0]) == 0:
 				lists_released += 1
+				ReliableBroadcast.handleRBroadcast(self.heldMessages['coin_list'][messageID][1], checkCoinboardMessages=False) 
 				del self.heldMessages['coin_list'][messageID]
-				ReliableBroadcast.handleRBroadcast(self.heldMessages['coin_list'][messageID][1], checkCoinboardMessages=False) #send the message back out and process it
+				#send the message back out and process it
 
 		if messages_decremented > 0 or blocks_removed > 0 or lists_released > 0:
 			self.log("{} messages decremented. {} blocks removed. {} lists released.".format(messages_decremented, blocks_removed, lists_released))
@@ -1665,7 +1683,7 @@ class ByzantineAgreement:
 		
 	def clearHeldWaveMessages(self):
 		#called on new iteration. 
-		self.heldMessages['wave'] = {2:[[],[]], 3:[[],[]]}
+		self.heldMessages['wave'] = {2:[[],[]], 3:[[],[],[]]}
 		self.heldMessages['wave3_special'] = {}
 		
 	#coinboard flip messages, and by extension, coinboard epoch/iteration messages, are NEVER cleared (the latter because flip and list messages are stored together in the epoch/iter buckets and we'd want to keep the flip messages). Even if a new iteration starts, old flips will be written into the coinboard to help along anyone else who comes calling.
