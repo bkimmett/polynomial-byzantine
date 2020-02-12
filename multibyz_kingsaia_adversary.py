@@ -569,7 +569,7 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 # 				if thisInstance['timing_quotas'][wave][message['sender']][1 if message['body'][2][0] else 0] > 0:
 # 					thisInstance['timing_quotas'][wave][message['sender']][1 if message['body'][2][0] else 0] -= 1
 	
-	if thisInstance['gameplan'] == 'shaker' or thisInstance['gameplan'] == None:
+	if thisInstance['gameplan'] == 'shaker' or thisInstance['gameplan'] is None:
 		log("Returning message - no changes with this gameplan.")
 		return_value_message(message) #shaker doesn't alter message values, ever. It just messes with timing.
 		return #we're done here
@@ -709,7 +709,7 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 	else:
 		return_value_message(message) #message not altered	
 		
-	if thisIteration['timing_quotas'] == None:
+	if thisIteration['timing_quotas'] is None or thisIteration['timing_quotas'][wave] is None:
 		return #there's no need to release messages if we didn't set a quota to hold them in the first place.
 		
 	# elif wave == 2:
@@ -806,7 +806,7 @@ def process_bracha_message_timing(message,thisInstance):#rbid,thisInstance):
 	
 	log("{} Received bracha timing message {}, from {} to {}.".format(thisInstance['ID'],message['body'],message['meta']['rbid'][0],message['sender']))
 	
-	if thisInstance['gameplan'] == 'lie_like_a_rug' or thisInstance['gameplan'] == None:
+	if thisInstance['gameplan'] == 'lie_like_a_rug' or thisInstance['gameplan'] is None:
 		log("Returning message - this gameplan doesn't alter timing.")
 		return_timing_message(message) #shaker doesn't alter message values, ever. It just messes with timing.
 		return
@@ -996,7 +996,7 @@ def process_coin_message_value(message,thisInstance):#rbid,thisInstance):
 	##'split' - try to split the value so different good nodes get different values.
 	
 	
-	if thisInstance['gameplan_coin'] == None:
+	if thisInstance['gameplan_coin'] is None:
 		if message['body'][0] != MessageMode.coin_ack or debug_coin_acks:
 			log("Returning message - no gameplan set.")
 		return_value_message(message) #Don't alter messages if no gameplan is set.
@@ -1120,7 +1120,7 @@ def process_coin_message_value(message,thisInstance):#rbid,thisInstance):
 	
 		
 def process_coin_message_timing(message,thisInstance): #rbid,thisInstance):
-	if thisInstance['gameplan_coin'] == 'bias' or thisInstance['gameplan_coin'] == 'bias_reverse' or thisInstance['gameplan_coin'] == None:
+	if thisInstance['gameplan_coin'] == 'bias' or thisInstance['gameplan_coin'] == 'bias_reverse' or thisInstance['gameplan_coin'] is None:
 		return_timing_message(message) #bias doesn't alter message timing, and 'no gameplan' doesn't either
 		return
 	elif thisInstance['gameplan_coin'] == 'split':

@@ -712,7 +712,7 @@ class ByzantineAgreement:
 					return
 				elif self.num_nodes - sum(self.brachaMsgCtrTotal[1]) + max(self.brachaMsgCtrTotal[1]) >= self.num_nodes // 2 + self.fault_bound + 1:
 					#it's still possible for it to fail
-					self.log("Holding uncertain non-deciding wave 3 bracha message from {}, not enough wave 2 messages to validate.".format(rbid[0],msgValue))
+					self.log("Holding uncertain non-deciding wave 3 bracha message from {}, not enough wave 2 messages to validate.".format(rbid[0]))
 					self.holdForLaterWave(message, 3, 2) #the '2' in msgValue shunts it into the non-decide box.
 				else:
 					pass #it's OK
@@ -1573,12 +1573,12 @@ class ByzantineAgreement:
 		if wave == 3:
 			#also check non-deciding wave 3 messages
 			if sum(messages_found) >= messages_additional:
-		    	#copy and clear held messages, because calling Validate on all of these has a chance to dump them all back in here
-		    	messages_to_revalidate = self.heldMessages['wave'][wave][2]
-		    	self.heldMessages['wave'][wave][2] = []
-		    	
-		    	for message in messages_to_revalidate:
-		    		self.validateBrachaMsg(message)
+				#copy and clear held messages, because calling Validate on all of these has a chance to dump them all back in here
+				messages_to_revalidate = self.heldMessages['wave'][wave][2]
+				self.heldMessages['wave'][wave][2] = []
+				
+				for message in messages_to_revalidate:
+					self.validateBrachaMsg(message)
 			
 	
 		#TODO: This doesn't work. Messages can get put back in the late-wave bucket because the number of messages needed is just a minimum.
