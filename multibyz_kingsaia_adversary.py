@@ -377,15 +377,19 @@ def get_message_ID(message):
 	try:
 		return message['meta']['rbid'][2][0] #byzID
 	except Exception as err:
+		print "Error getting message ID:"
 		print err
-		raise err
+		return None
+		#raise err
 		
 def get_message_sender(message):
 	try:
 		return message['meta']['rbid'][0] #sender
 	except Exception as err:
+		print "Error getting message sender:"
 		print err
-		raise err		
+		return None
+		#raise err		
 		
 # def maybe_return_unchanged_message(message):
 # 	uid = get_uid(message)
@@ -1302,6 +1306,11 @@ def process_message(message, reprocess=False):
 		exit()
 	
 	instance = get_message_ID(message)
+	
+	if instance is None: #this message is not a byzantine message. Let it through.
+		return_value_message(message)
+		return
+	
 	try:
 		rbid = message['meta']['rbid']
 		epoch = rbid[2][1]
@@ -1398,7 +1407,7 @@ def main(args):
 	while True:
 		#print "Checking for messages."
 		
-		adv_message = MessageHandler.receive_backchannel(im_adversary=True)
+		adv_message = MessageHandler.receive_backchannel() #receive_backchannel(im_adversary=True)
 		if adv_message is None:
 			if not weSaidNoMessages: #only say 'nobody home' once until we receive messages again.
 				print "No messages."

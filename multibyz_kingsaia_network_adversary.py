@@ -1,3 +1,5 @@
+# pylint: disable=mixed-indentation,trailing-whitespace,bad-whitespace,line-too-long,invalid-name,missing-docstring
+
 from kombu import Connection, Queue, Exchange #, Producer, Consumer
 #from kombu.common import drain_consumer
 #getting an error with the above line? 'pip install kombu'
@@ -89,8 +91,8 @@ def shutdown():
 	
 
 def send(message,metadata,destination,type_override=None):
+	#send a message to one other node.
 	__producer.publish(message,routing_key=str(destination)+'-q',headers={"type": type_override if type_override is not None else __my_type,"sender":__username,"meta":metadata}, serializer='json')
-
 
 	#in the real world, there would probably be a try(), and in the event of an error, a revive() and a reattempt.
 	#also in the real world, the sender would be a property of the messages' transit. Here, using this networking framework, we have to add it manually.
@@ -105,27 +107,24 @@ def sendAsAdversary(message,metadata,destination,type_override=None):
 	__backch_producer.publish(message,routing_key=str(destination)+'-adv',headers={"meta":metadata, "type":type_override if type_override is not None else 'node', "sender":destination}, serializer='json')
 	
 def adversaryBroadcast(message,metadata,sender='adversary',type_override=None):
+	#once a node has broadcast a message, and the adversary has approved it, the adversary uses this to send it on
 	__producer.publish(message, exchange=__global_exchange, headers={"type":type_override if type_override is not None else 'node',"sender":sender,"meta":metadata}, serializer='json')
 
 def sendToAdversary(message,metadata,type_override=None):
 	#sends message to adversary for value messing-with..
 	__backch_producer.publish(message, routing_key="adversary", exchange=__adv_exchange, headers={"type":type_override if type_override is not None else __my_type,"sender":__username,"meta":metadata}, serializer='json')
 
-#def sendToAdversary2(message,metadata,type_override=None):
-	#sends message about to be accepted to adversary.
-#	__backch_producer.publish(message, routing_key="adversary-accept", exchange=__adv_exchange, headers={"type":type_override if type_override is not None else __my_type,"sender":__username,"meta":metadata}, serializer='json')
-
 
 def sendAll(message,metadata,type_override=None):
+	#send a message to everybody.
 	__producer.publish(message, exchange=__global_exchange, headers={"type":type_override if type_override is not None else __my_type,"sender":__username,"meta":metadata}, serializer='json')
 	#IMPORTANT: for reliable broadcast, "send to all" means yourself too.
 	#MODULAR - replace this code with whatever network functionality.
 	return
 	
 	
-def receive_backchannel(im_adversary=False):	
+def receive_backchannel(): #im_adversary=False):	
 	#receive adversarial traffic.
-	#code = None
 	message = __adv_queue.get(True)
 	if message is not None:
 		try:

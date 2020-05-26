@@ -2,12 +2,13 @@
 
 from __future__ import division #utility
 import random					#for coin flips
-from sys import argv, exit, stdout 		#utility
+from sys import argv, exit, stdout, exc_info 		#utility
 from time import sleep, strftime 	#to wait for messages, and for logging
 from math import floor, sqrt, log 			#utility
 from copy import deepcopy 		#utility
 #import numpy as np 				#for matrix operations in _processEpoch
 from json import dumps			#for making UIDs good
+import traceback 				#debugging
 import multibyz_kingsaia_network as MessageHandler 
 #getting an error with the above line? 'pip install kombu'
 import collections				#for data type checking of messages
@@ -19,8 +20,10 @@ from blist import blist 		#containers that offer better performance when they ge
 #debug logging
 
 debug_rb = False
-debug_rb_accept = False
+debug_rb_coin = False
+debug_rb_accept = True
 debug_byz = True
+debug_show_coinboards = True
 
 
 #Reminder: message[sender] is the node that sent the message the 'last mile'. It is NOT the original sender. rbid[0] is the real originating sender.
@@ -106,6 +109,12 @@ class ReliableBroadcast: # pylint: disable=no-init
 			print "[{}:{}] {}".format(strftime("%H:%M:%S"),username,message)
 			#stdout.flush() #force write
 	
+	@classmethod
+	def logCoin(thisClass,message):
+		if debug_rb_coin:
+			global username
+			print "[{}:{}] {}".format(strftime("%H:%M:%S"),username,message)
+			#stdout.flush() #force write
 		
 	
 	@classmethod
@@ -144,7 +153,7 @@ class ReliableBroadcast: # pylint: disable=no-init
 		global message_counter
 		
 		MessageHandler.sendAll(message,{'phase':thisClass.RBPhase.initial,'rbid':(username,message_counter,extraMeta)})
-		#MessageHandler.sendAll(("rBroadcast","initial",(username, message_counter, message),None),("rBroadcast","initial",username, message_counter,)) 
+		
 		thisClass.log("SENDING INITIAL reliable broadcast message for key < {} > to all.".format(repr(message)))
 		message_counter += 1
 		#We don't need to call setupRbroadcastEcho yet. The first person to receive the 'initial' message will be-- us! And it'll happen then.
@@ -179,20 +188,29 @@ class ReliableBroadcast: # pylint: disable=no-init
 		
 		is_byzantine_related = False
 		
-		try:
-			if len(data) > 0:
-				if data[0] == MessageMode.coin_flip or data[0] == MessageMode.coin_list or data[0] == MessageMode.coin_ack or data[0] == MessageMode.bracha:
-					is_byzantine_related = True #probably true, anyway. Sadly, I'm doing the old C way of comparing to an obscured constant as opposed to a class instance, because the serialization method (JSON) I'm using can't send objects/custom data types. And switching to an upgraded serializer (pickle) would be flagrantly insecure, to where it would be REALLY EASY for an adversary to take over every node at once by sending a malicious broadcast message. Ripperoni.
-		except TypeError:
-			pass #it's not byzantine
+		if isinstance(data,collections.Sequence) and len(data) > 0 and (data[0] == MessageMode.coin_flip or data[0] == MessageMode.coin_list or data[0] == MessageMode.coin_ack or data[0] == MessageMode.bracha):
+			is_byzantine_related = True 
+			#probably true, anyway. Sadly, I'm doing the old C way of comparing to an obscured constant as opposed to a class instance, because the serialization method (JSON) I'm using can't send objects/custom data types. And switching to an upgraded serializer (pickle) would be flagrantly insecure, to where it would be REALLY EASY for an adversary to take over every node at once by sending a malicious broadcast message. Ripperoni.
+		
+
+		if is_byzantine_related and (data[0] == MessageMode.coin_flip or data[0] == MessageMode.coin_list):
 			
-		###try:
-		if is_byzantine_related and checkCoinboardMessages and (data[0] == MessageMode.coin_flip or data[0] == MessageMode.coin_list):
-			instance = ByzantineAgreement.getInstance(rbid[2][0]) #rbid[2][0] = extraMeta[0] = byzID
-			if not instance.checkCoinboardMessageHolding(message):
-				return None#if held, stop processing for now
+			if data[0] == MessageMode.coin_flip:
+					thisClass.logCoin("Received coin flip RB message from {}. Phase: {}.".format(rbid[0],phase))
 					
-					
+			if checkCoinboardMessages:
+				#if data[0] == MessageMode.coin_list:
+				#	thisClass.logCoin("Received coin list RB message from {}. Phase: {}.".format(rbid[0],phase))
+				instance = ByzantineAgreement.getInstance(rbid[2][0]) #rbid[2][0] = extraMeta[0] = byzID
+				if not instance.checkCoinboardMessageHolding(message):
+					#if data[0] == MessageMode.coin_list:
+					if data[0] == MessageMode.coin_flip:
+						thisClass.logCoin("Held by checkCoinboardMessageHolding.")
+					return None#if held, stop processing for now
+				#if data[0] == MessageMode.coin_list:
+				#thisClass.logCoin("Good to go!")		
+			else:
+				thisClass.logCoin("Not checking checkCoinboardMessageHolding.")		
 					
 				#coinboard message - possibly hold for later!
 				#coinboard messages can be held for the following reasons:
@@ -242,7 +260,7 @@ class ReliableBroadcast: # pylint: disable=no-init
 			if thisClass.broadcasting_echoes[uid][3] == thisClass.RBPhase.initial or thisClass.broadcasting_echoes[uid][3] == thisClass.RBPhase.echo:
 				thisClass.log("Initial/Echo Phase: {}/{} of {} ready messages so far.".format(len(thisClass.broadcasting_echoes[uid][2]), thisClass.fault_bound + 1, thisClass.num_nodes)) #print how many readies we need to advance
 			elif thisClass.broadcasting_echoes[uid][3] == thisClass.RBPhase.ready:
-				thisClass.log("Ready Phase: {}/{} of {} ready messages so far.".format(len(thisClass.broadcasting_echoes[uid][2]), thisClass.fault_bound*2 + 1, thisClass.num_nodes)) #print how many readies we need to accept
+				thisClass.log("Ready Phase: {}/{} of {} ready messages so far.".format(len(thisClass.broadcasting_echoes[uid][2]), thisClass.num_nodes - thisClass.fault_bound, thisClass.num_nodes)) #thisClass.fault_bound*2 + 1, thisClass.num_nodes)) #print how many readies we need to accept
 			else: 
 				thisClass.log("{} of {} ready messages.".format(len(thisClass.broadcasting_echoes[uid][2]), thisClass.num_nodes)) #print how many readies we got
 		else:
@@ -251,13 +269,13 @@ class ReliableBroadcast: # pylint: disable=no-init
 			return None
 			
 			
-		if thisClass.checkRbroadcastEcho(data,rbid,uid): #runs 'check message' until it decides we're done handling any sort of necessary sending	
+		if thisClass.checkRbroadcastEcho(data,message['meta'],uid): #runs 'check message' until it decides we're done handling any sort of necessary sending	
 			return message #original packed message is fastballed back towards the client, as the validate functions the client will pass it on to use packed format
 			
 		return None
 	
 	@classmethod
-	def checkRbroadcastEcho(thisClass,data,rbid,uid):
+	def checkRbroadcastEcho(thisClass,data,meta,uid):
 		
 		#TODO: A concern - (num_nodes + fault_bound) / 2 on a noninteger fault_bound?
 		#It'll be fine because of >=.
@@ -267,10 +285,10 @@ class ReliableBroadcast: # pylint: disable=no-init
 					
 		if thisClass.broadcasting_echoes[uid][3] == thisClass.RBPhase.initial:
 			#waiting to send echo
-			if thisClass.broadcasting_echoes[uid][0] or len(thisClass.broadcasting_echoes[uid][1]) >= (num_nodes + fault_bound) / 2 or len(thisClass.broadcasting_echoes[uid][2]) >= fault_bound + 1: #one initial OR (n+t)/2 echoes OR t+1 readies
+			if thisClass.broadcasting_echoes[uid][0] or len(thisClass.broadcasting_echoes[uid][1]) >= (thisClass.num_nodes + thisClass.fault_bound) / 2 or len(thisClass.broadcasting_echoes[uid][2]) >= thisClass.fault_bound + 1: #one initial OR (n+t)/2 echoes OR t+1 readies
 				#ECHO!
 				thisClass.log("SENDING ECHO reliable broadcast message for key < {} > to all.".format(repr(data)))
-				MessageHandler.sendAll(data,{'phase':thisClass.RBPhase.echo,'rbid':rbid})
+				MessageHandler.sendAll(data,{'phase':thisClass.RBPhase.echo,'rbid':meta['rbid']})
 				#MessageHandler.sendAll(("rBroadcast","echo",data,None)) 
 				#4th item in message is debug info
 				thisClass.broadcasting_echoes[uid][3] = thisClass.RBPhase.echo #update node phase
@@ -279,10 +297,10 @@ class ReliableBroadcast: # pylint: disable=no-init
 				
 		if thisClass.broadcasting_echoes[uid][3] == thisClass.RBPhase.echo:
 			#waiting to send ready
-			if len(thisClass.broadcasting_echoes[uid][1]) >= (num_nodes + fault_bound) / 2 or len(thisClass.broadcasting_echoes[uid][2]) >= fault_bound + 1: #(n+t)/2 echoes OR t+1 readies
+			if len(thisClass.broadcasting_echoes[uid][1]) >= (thisClass.num_nodes + thisClass.fault_bound) / 2 or len(thisClass.broadcasting_echoes[uid][2]) >= thisClass.fault_bound + 1: #(n+t)/2 echoes OR t+1 readies
 				#READY!
 				thisClass.log("SENDING READY reliable broadcast message for key < {} > to all.".format(repr(data)))
-				MessageHandler.sendAll(data,{'phase':thisClass.RBPhase.ready,'rbid':rbid})
+				MessageHandler.sendAll(data,{'phase':thisClass.RBPhase.ready,'rbid':meta['rbid']})
 				#MessageHandler.sendAll(("rBroadcast","ready",data,None)) #message format: type, [phase, data, debuginfo]
 				thisClass.broadcasting_echoes[uid][3] = thisClass.RBPhase.ready #update node phase
 			else:
@@ -290,13 +308,14 @@ class ReliableBroadcast: # pylint: disable=no-init
 				
 		if thisClass.broadcasting_echoes[uid][3] == thisClass.RBPhase.ready:
 			#waiting to accept
-			if len(thisClass.broadcasting_echoes[uid][2]) >= thisClass.fault_bound*2 + 1: #2t+1 readies only
+			if len(thisClass.broadcasting_echoes[uid][2]) >= thisClass.num_nodes - thisClass.fault_bound: #thisClass.fault_bound*2 + 1: #2t+1 readies only
 				#ACCEPT!
 				thisClass.broadcasting_echoes[uid][3] = thisClass.RBPhase.done
-				return thisClass.acceptRbroadcast(data,rbid)
+				return thisClass.acceptRbroadcast(data,meta)
 			#otherwise...
 			#print "Not accepting, {} of {} messages.".format(thisClass.broadcasting_echoes[uid][2],thisClass.fault_bound*2+1)
-			return False #wait for more messages!
+			else:
+				return False #wait for more messages!
 		
 		if thisClass.broadcasting_echoes[uid][3] == thisClass.RBPhase.done:
 			return False #we've already accepted this. no further processing.

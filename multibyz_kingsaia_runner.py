@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# pylint: disable=mixed-indentation,trailing-whitespace,bad-whitespace,line-too-long,invalid-name
 
 from __future__ import division
 from math import log, ceil
@@ -29,7 +30,7 @@ def main(args):
 	except OSError:
 		pass #dir already exists
 	
-	#server needs to be launched manually, with command 'rabbitmq-server &'
+	### IMPORTANT: The server needs to be launched manually, with command 'rabbitmq-server &'. If you don't you will get a number of amusing errors.
 	
 	#launch nodes
 	for node in node_names:
@@ -54,3 +55,4 @@ def main(args):
 	
 if __name__ == "__main__":
 	main(argv[1:])	
+	

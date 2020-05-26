@@ -1,3 +1,5 @@
+# pylint: disable=mixed-indentation,trailing-whitespace,bad-whitespace,line-too-long,invalid-name, missing-docstring
+
 from kombu import Connection, Queue, Exchange #, Producer, Consumer
 #from kombu.common import drain_consumer
 #getting an error with the above line? 'pip install kombu'
@@ -43,8 +45,10 @@ def shutdown():
 	__connection.release()
 
 
-def send(message,metadata,destination):
-	__producer.publish(message,routing_key=str(destination)+'-q',headers={"type":__my_type,"sender":__username,"meta":metadata}, serializer='json')
+def send(message,metadata,destination,type_override=None):
+	#send a message to one other node.
+	__producer.publish(message,routing_key=str(destination)+'-q',headers={"type": type_override if type_override is not None else __my_type,"sender":__username,"meta":metadata}, serializer='json')
+
 	#in the real world, there would probably be a try(), and in the event of an error, a revive() and a reattempt.
 	#also in the real world, the sender would be a property of the messages' transit. Here, using this networking framework, we have to add it manually.
 	#for those testing adversarial nodes: assume they are unable to forge this 'sender' attribute.
@@ -53,10 +57,8 @@ def send(message,metadata,destination):
 	return
 
 def sendAll(message,metadata,type_override=None):
-	if type_override is not None:
-		__producer.publish(message, exchange=__global_exchange, headers={"type":type_override,"sender":__username,"meta":metadata}, serializer='json')
-	else:
-		__producer.publish(message ,exchange=__global_exchange, headers={"type":__my_type,"sender":__username,"meta":metadata}, serializer='json')
+	#send a message to everybody.
+	__producer.publish(message, exchange=__global_exchange, headers={"type":type_override if type_override is not None else __my_type,"sender":__username,"meta":metadata}, serializer='json')
 	#IMPORTANT: for reliable broadcast, "send to all" means yourself too.
 	#MODULAR - replace this code with whatever network functionality.
 	return

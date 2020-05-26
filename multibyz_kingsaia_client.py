@@ -1,30 +1,28 @@
 #!/usr/bin/env python
+# pylint: disable=mixed-indentation,trailing-whitespace,bad-whitespace,line-too-long,invalid-name
 
 from __future__ import division
 from sys import argv, exit
-from time import sleep, time
+from time import time #, sleep
 from string import split
 import random
-#from random import choice, sample, random
 import multibyz_kingsaia_network as MessageHandler
 #getting an error with the above line? 'pip install kombu'
 
 
-def main(args):
-	#args = my user ID, the number of nodes. For the time being, we're not passing around node IDs but eventually we WILL need everyone to know all the node ids.
+def main(args): #pylint: disable=too-many-locals, too-many-branches, too-many-statements
+	#args = a list of node names of everyone participating, followed by a custom username if any
 	print "Starting up..."
-
+	
 		
 	try:
 		random_generator = random.SystemRandom()
-	except Exception as e:
+	except NotImplementedError:
 		print "Couldn't initialize RNG. Check that your OS/device supports random.SystemRandom()."
-		print repr(e)
 		exit()
 	
 	decision_IDs = {}
 	
-	#num_nodes = int(args[0])
 	with open(args[0]) as node_list:
 		all_nodes = [line.rstrip() for line in node_list]
 	
@@ -41,18 +39,20 @@ def main(args):
 		
 		last_message_time = time()	
 		
-	while True:	
+	while True:	#pylint: disable=too-many-nested-blocks
 		print "Checking for messages."
 		while True:
 			if time() - last_message_time >= 5:
 				break #if we've been processing messages for 5 seconds straight, pause to give control to the user
 			message = MessageHandler.receive_next()
 			if message is None:
-				weSaidNoMessages = True
+				#weSaidNoMessages = True
 				break
 				#sleep(1) #wait a second before we check again.
 			else:
-				weSaidNoMessages = False
+				#weSaidNoMessages = False
+				
+				#debug: print message info
 				#print message.headers
 				#print message.body
 				#print repr(message)
@@ -76,11 +76,11 @@ def main(args):
 						print "Received deciding message from node {} for byzantine ID {}: {}.".format(sender, byzID, decision)
 						decision_IDs[byzID][1 if decision else 0].append(sender)
 					
-						if decision_IDs[byzID][2] == None and len(decision_IDs[byzID][1 if decision else 0]) >= fault_bound + 1:
+						if decision_IDs[byzID][2] is None and len(decision_IDs[byzID][1 if decision else 0]) >= fault_bound + 1:
 							decision_IDs[byzID][2] = [True if decision else False]
 							print "Accepting decision for byzantine ID {}: {}.".format(byzID, decision)
 					
-						if decision_IDs[byzID][3] == None and len(decision_IDs[byzID][1 if decision else 0]) >= num_nodes // 2 + 1:
+						if decision_IDs[byzID][3] is None and len(decision_IDs[byzID][1 if decision else 0]) >= num_nodes // 2 + 1:
 							decision_IDs[byzID][3] = [True if decision else False]
 							print "Received decision majority for byzantine ID {}: {}.".format(byzID, decision)	
 						
@@ -98,8 +98,6 @@ def main(args):
 					print "Unknown message received."
 					print repr(message)
 					#malformed headers! Throw an error? Drop? Request resend?
-				
-			
 		
 				
 		try:
@@ -108,13 +106,13 @@ def main(args):
 			if message != "":
 				try:
 					input_split = split(message," ",1)
-					command = '' if len(input_split) < 1 else input_split[0]
+					command = '' if (not input_split) else input_split[0]
 					message2 = '' if len(input_split) < 2 else input_split[1]
 							
 					if command == "msg":
 						dest, message3 = split(message2+" ", " ", 1)
 						MessageHandler.send(message3[:-1],{'code':'message'},dest)
-						#send format: message, dest, meta
+						#send format: message, meta, dest
 						print "Message sent to {}.".format(dest)
 					elif command == "msgall":
 						MessageHandler.sendAll(message2,{'code':'message'})
@@ -125,26 +123,28 @@ def main(args):
 						MessageHandler.send(message3[:-1],{'code':'broadcast'},dest)
 						#send format: message, meta, dest
 						print "Message sent to {} to be broadcast.".format(dest)
-					elif command == "adv":
+					elif command == "adv" or command == "adv_get" or command == "adv_release":
 						print "This isn't the adversarial-setup version of the client. Try another command."
 					elif command == "byz": 
 						byz_ids_so_far += 1
 						byz_id = "{}-{}".format("".join([random_generator.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ') for _ in range(10)]),byz_ids_so_far)
 						#gives a random ten-letter ID and a counter.
 						
-						input_split = split(message2," ",2)
-						numTrue = 0 if len(input_split) < 1 else int(input_split[0])
+						input_split = split(message2," ",2) #num_nodes_true, [num_nodes_false], leftovers
+						numTrue = num_nodes if (not input_split) else int(input_split[0])
 						numFalse = num_nodes - numTrue if len(input_split) < 2 else int(input_split[1])
 						
 						numRandom = num_nodes - (numTrue + numFalse)
 						
-						print "Starting byzantine agreement instance {}, {} nodes True, {} nodes False{}.".format(byz_id,numTrue,numFalse,
-						"" if numRandom == 0 else ", {} nodes random".format(numRandom))
+						print "Starting byzantine agreement instance {}, {} nodes True, {} nodes False{}.".format(byz_id, numTrue, numFalse, "" if numRandom == 0 else ", {} nodes random".format(numRandom))
 						
 						random_node_order = random_generator.sample(all_nodes,num_nodes)
 						
 						print "Nodes true: {}".format(random_node_order[:numTrue])
 						print "Nodes false: {}".format(random_node_order[numTrue:numTrue+numFalse])
+
+						rand_nodes_true = []
+						rand_nodes_false = []
 						
 						for node in random_node_order[:numTrue]:
 							MessageHandler.send(True,{'code':'byzantine','byzID':byz_id},node)
@@ -153,10 +153,19 @@ def main(args):
 							MessageHandler.send(False,{'code':'byzantine','byzID':byz_id},node)	
 							
 						for node in random_node_order[numTrue+numFalse:]:
-							MessageHandler.send(random_generator.random() >= .5,{'code':'byzantine','byzID':byz_id},node)	
+							flip = (random_generator.random() >= .5)
+							MessageHandler.send(flip,{'code':'byzantine','byzID':byz_id},node)
+							
+							if flip:
+								rand_nodes_true.append(node)
+							else:
+								rand_nodes_false.append(node)
+						
+						if not random_node_order[numTrue+numFalse:]: #checks if this portion is empty
+							print "RNG Nodes true: {}".format(rand_nodes_true)
+							print "RNG Nodes false: {}".format(rand_nodes_false)
 						
 						
-						#MessageHandler.send(message3,dest,{'code':'broadcast'})
 						#send format: message, meta, dest IN THAT ORDER!!!
 						#print "Message sent to {}.".format(dest)
 						
@@ -166,10 +175,13 @@ def main(args):
 						exit(0)
 					elif command == "help":
 						print """Available commands:
-msg <dest> <message> - send a message to one node; that node will reliable-broadcast it
-msgall <message> - send a message to all nodes; each will reliable-broadcast it
-	(node names for 'msg' and 'msgall' must not contain spaces.)
-byz <nodes_true> <nodes_false> - start a byzantine agreement instance. <nodes_true> nodes will have the starting value 'True' (1), <nodes_false> nodes will have the starting value 'False' (0).
+msg <dest> <message> - send a message to one node; that node will print it
+msgall <message> - send a message to all nodes; each will print it
+rb <dest> <message> - send a message to one node; that node will reliable-broadcast it
+	(node names for 'msg', 'msgall', and 'rb' must not contain spaces.)
+byz [<nodes_true> [<nodes_false>]] - start a byzantine agreement instance. 
+	<nodes_true> nodes will have the starting value 'True' (1), <nodes_false> nodes will have the starting value 'False' (0). 
+	If you only include <nodes_true>, the other nodes will start False. If you include both values but there are nodes left over, the remaining nodes will be assigned randomly.
 help - display this message
 halt - shut down the client. If you're using the runner, this will stop all nodes."""
 					else:
@@ -185,3 +197,4 @@ halt - shut down the client. If you're using the runner, this will stop all node
 		
 if __name__ == "__main__":
 	main(argv[1:])	
+	
