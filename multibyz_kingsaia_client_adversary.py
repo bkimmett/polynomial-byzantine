@@ -3,15 +3,77 @@
 
 from __future__ import division
 from sys import argv, exit
-from time import time #, sleep
+from time import time, sleep
 from string import split
 import random
+import threading
 import multibyz_kingsaia_network_adversary as MessageHandler
 #getting an error with the above line? 'pip install kombu'
+
+def check_for_messages_loop(timeout):
+	print "Checking for messages."
+	while True:
+		message = MessageHandler.receive_next()
+		if message is None:
+			#weSaidNoMessages = True
+			#break
+			sleep(timeout) #wait a second before we check again.
+		else:
+			#weSaidNoMessages = False
+			
+			#debug: print message info
+			#print message.headers
+			#print message.body
+			#print repr(message)
+			#type = message['type']
+		
+			if message['type'] == "client":
+				pass #We sent this message. Ignore it.
+			elif message['type'] == "node":
+				pass #IGNORE - internal message
+			elif message['type'] == "announce":
+				print "Announcement to client: "
+				print message['body']
+			elif message['type'] == "decide":
+				#We're assuming the adversary won't misformat decide messages.
+				byzID = message['meta']
+				if byzID not in decision_IDs:
+					decision_IDs[byzID] = [[],[],None,None]
+				sender = message['sender']
+				decision = message['body']
+				if sender not in decision_IDs[byzID][1 if decision else 0]:
+					print "Received deciding message from node {} for byzantine ID {}: {}.".format(sender, byzID, decision)
+					decision_IDs[byzID][1 if decision else 0].append(sender)
+				
+					if decision_IDs[byzID][2] is None and len(decision_IDs[byzID][1 if decision else 0]) >= fault_bound + 1:
+						decision_IDs[byzID][2] = [True if decision else False]
+						print "Accepting decision for byzantine ID {}: {}.".format(byzID, decision)
+				
+					if decision_IDs[byzID][3] is None and len(decision_IDs[byzID][1 if decision else 0]) >= num_nodes // 2 + 1:
+						decision_IDs[byzID][3] = [True if decision else False]
+						print "Received decision majority for byzantine ID {}: {}.".format(byzID, decision)	
+					
+						if decision_IDs[byzID][2] != decision_IDs[byzID][3]:
+							print "Warning: Majority and accepted decision don't match!"
+				
+				else:
+					print "Duplicate deciding message received from node {}.".format(sender)
+				
+			elif message['type'] == "halt":
+				#this is for local-machine testing purposes only - it makes every node exit. Assume the adversary can't do this.
+				#exit(0)	
+				pass
+			else: 
+				print "Unknown message received."
+				print repr(message)
+				#malformed headers! Throw an error? Drop? Request resend?
+	
 
 
 def main(args): #pylint: disable=too-many-locals, too-many-branches, too-many-statements
 	#args = a list of node names of everyone participating, followed by a custom username if any
+	global decision_IDs, num_nodes, fault_bound, all_nodes, byz_ids_so_far
+	
 	print "Starting up..."
 	
 		
@@ -30,72 +92,17 @@ def main(args): #pylint: disable=too-many-locals, too-many-branches, too-many-st
 	fault_bound = (num_nodes - 1) // 3  #t < n/3. Not <=.
 
 	byz_ids_so_far = 0
-
 	
 	if len(args) > 1:
 		MessageHandler.init(args[1],"client")
 	else:
 		MessageHandler.init("client","client") #anonymous client
 		
-	while True:	#pylint: disable=too-many-nested-blocks
-		print "Checking for messages."
-		while True:
-			message = MessageHandler.receive_next()
-			if message is None:
-				#weSaidNoMessages = True
-				break
-				#sleep(1) #wait a second before we check again.
-			else:
-				#weSaidNoMessages = False
-				
-				#debug: print message info
-				#print message.headers
-				#print message.body
-				#print repr(message)
-				#type = message['type']
-			
-				if message['type'] == "client":
-					pass #We sent this message. Ignore it.
-				elif message['type'] == "node":
-					pass #IGNORE - internal message
-				elif message['type'] == "announce":
-					print "Announcement to client: "
-					print message['body']
-				elif message['type'] == "decide":
-					#We're assuming the adversary won't misformat decide messages.
-					byzID = message['meta']
-					if byzID not in decision_IDs:
-						decision_IDs[byzID] = [[],[],None,None]
-					sender = message['sender']
-					decision = message['body']
-					if sender not in decision_IDs[byzID][1 if decision else 0]:
-						print "Received deciding message from node {} for byzantine ID {}: {}.".format(sender, byzID, decision)
-						decision_IDs[byzID][1 if decision else 0].append(sender)
-					
-						if decision_IDs[byzID][2] is None and len(decision_IDs[byzID][1 if decision else 0]) >= fault_bound + 1:
-							decision_IDs[byzID][2] = [True if decision else False]
-							print "Accepting decision for byzantine ID {}: {}.".format(byzID, decision)
-					
-						if decision_IDs[byzID][3] is None and len(decision_IDs[byzID][1 if decision else 0]) >= num_nodes // 2 + 1:
-							decision_IDs[byzID][3] = [True if decision else False]
-							print "Received decision majority for byzantine ID {}: {}.".format(byzID, decision)	
-						
-							if decision_IDs[byzID][2] != decision_IDs[byzID][3]:
-								print "Warning: Majority and accepted decision don't match!"
-					
-					else:
-						print "Duplicate deciding message received from node {}.".format(sender)
-					
-				elif message['type'] == "halt":
-					#this is for local-machine testing purposes only - it makes every node exit. Assume the adversary can't do this.
-					#exit(0)	
-					pass
-				else: 
-					print "Unknown message received."
-					print repr(message)
-					#malformed headers! Throw an error? Drop? Request resend?
+	receive_thread = threading.Thread(target=check_for_messages_loop, args=(5,))
+	receive_thread.daemon = True #background thread - cleared when program exits without needing to stop it manually
+	receive_thread.start()	#message receipt will now happen in the background
 		
-				
+	while True:	#pylint: disable=too-many-nested-blocks		
 		try:
 			message = raw_input("Ready > ")
 			if message != "":
@@ -154,49 +161,63 @@ def main(args): #pylint: disable=too-many-locals, too-many-branches, too-many-st
 							print "Adversary should reply with its current gameplans shortly."
 						except NameError:
 							print "Couldn't send to adversary - it looks like you're not using an adversarial setup."
-					elif command == "byz": 
-						byz_ids_so_far += 1
-						byz_id = "{}-{}".format("".join([random_generator.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ') for _ in range(10)]),byz_ids_so_far)
-						#gives a random ten-letter ID and a counter.
+					elif command == "byz" or command == "multibyz":
 						
-						input_split = split(message2," ",2) #num_nodes_true, [num_nodes_false], leftovers
+						input_split = split(message2," ",4) #num_nodes_true, [num_nodes_false], leftovers
 						numTrue = num_nodes if (not input_split) else int(input_split[0])
 						numFalse = num_nodes - numTrue if len(input_split) < 2 else int(input_split[1])
 						
 						numRandom = num_nodes - (numTrue + numFalse)
 						
-						print "Starting byzantine agreement instance {}, {} nodes True, {} nodes False{}.".format(byz_id, numTrue, numFalse, "" if numRandom == 0 else ", {} nodes random".format(numRandom))
+						if command == "multibyz":
+							numRuns = int(input_split[2])
+							wait_after = int(input_split[3])
+							print "Running {} BA runs with a delay of {} seconds. Please wait...".format(numRuns,wait_after)
+						else:
+							numRuns = 1
+							wait_after = 0
+							
+						for _ in xrange(numRuns):
 						
-						random_node_order = random_generator.sample(all_nodes,num_nodes)
+							byz_ids_so_far += 1
+							byz_id = "{}-{}".format("".join([random_generator.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ') for _ in range(10)]),byz_ids_so_far)
+							#gives a random ten-letter ID and a counter.
 						
-						print "Nodes true: {}".format(random_node_order[:numTrue])
-						print "Nodes false: {}".format(random_node_order[numTrue:numTrue+numFalse])
+							print "Starting byzantine agreement instance {}, {} nodes True, {} nodes False{}.".format(byz_id, numTrue, numFalse, "" if numRandom == 0 else ", {} nodes random".format(numRandom))
+						
+							random_node_order = random_generator.sample(all_nodes,num_nodes)
+						
+							print "Nodes true: {}".format(random_node_order[:numTrue])
+							print "Nodes false: {}".format(random_node_order[numTrue:numTrue+numFalse])
 
-						rand_nodes_true = []
-						rand_nodes_false = []
+							rand_nodes_true = []
+							rand_nodes_false = []
 						
-						for node in random_node_order[:numTrue]:
-							MessageHandler.send(True,{'code':'byzantine','byzID':byz_id},node)
+							for node in random_node_order[:numTrue]:
+								MessageHandler.send(True,{'code':'byzantine','byzID':byz_id},node)
 							
-						for node in random_node_order[numTrue:numTrue+numFalse]:
-							MessageHandler.send(False,{'code':'byzantine','byzID':byz_id},node)	
+							for node in random_node_order[numTrue:numTrue+numFalse]:
+								MessageHandler.send(False,{'code':'byzantine','byzID':byz_id},node)	
 							
-						for node in random_node_order[numTrue+numFalse:]:
-							flip = (random_generator.random() >= .5)
-							MessageHandler.send(flip,{'code':'byzantine','byzID':byz_id},node)
+							for node in random_node_order[numTrue+numFalse:]:
+								flip = (random_generator.random() >= .5)
+								MessageHandler.send(flip,{'code':'byzantine','byzID':byz_id},node)
 							
-							if flip:
-								rand_nodes_true.append(node)
-							else:
-								rand_nodes_false.append(node)
+								if flip:
+									rand_nodes_true.append(node)
+								else:
+									rand_nodes_false.append(node)
 						
-						if not random_node_order[numTrue+numFalse:]: #checks if this portion is empty
-							print "RNG Nodes true: {}".format(rand_nodes_true)
-							print "RNG Nodes false: {}".format(rand_nodes_false)
+							if random_node_order[numTrue+numFalse:]: #checks if this portion is not empty
+								print "RNG Nodes true: {}".format(rand_nodes_true)
+								print "RNG Nodes false: {}".format(rand_nodes_false)
 						
+							sleep(wait_after)
+							#send format: message, meta, dest IN THAT ORDER!!!
+							#print "Message sent to {}.".format(dest)
 						
-						#send format: message, meta, dest IN THAT ORDER!!!
-						#print "Message sent to {}.".format(dest)
+						if command == "multibyz":
+							print "All done!"
 						
 					elif command == "halt":
 						print "Shutting down."
