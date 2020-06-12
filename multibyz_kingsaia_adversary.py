@@ -25,7 +25,7 @@ from multibyz_kingsaia_node_adversary import MessageMode
 # All of the communications of the implementation use Reliable Broadcast. Which is remarkably difficult to interfere with... which is kind of the point. So, to simulate it, we have each node add an extra step before it accepts a Reliable Broadcast message.
 # The extra step is: the node sends its ID, along with the message it was about to accept, to the simulated adversary. The simulated adversary can choose to return it now (indicating no delay), return it later (indicating delay), or change it (which means the adversary has taken over the original sender of the node and now can broadcast whatever it wants, but is pretending to be normal)
 
-defer_in_unwinnable_situations = True
+defer_in_unwinnable_situations = False
 #By default, if all good nodes are unanimous, the adversary knows it can't do anything so it'll give up. Set this to 'False' to have the adversary try to still intervene if all good nodes are unanimous anyway. This could be used when testing bracha, for example.
 
 instances = {}
@@ -33,6 +33,7 @@ current_master_gameplan_bracha = None
 current_master_gameplan_coin = None
 
 default_target = False
+#this is the adversary's chosen direction. change this to have the adversary go for the other way.
 
 all_nodes = []
 
@@ -577,15 +578,17 @@ def process_bracha_message_value(message,thisInstance): #rbid,thisInstance):
 		log("Returning message - no changes with this gameplan.")
 		return_value_message(message) #shaker doesn't alter message values, ever. It just messes with timing.
 		return #we're done here
+	
+	#old lie like a rug script - now handled below
 		
-	if thisInstance['gameplan'] == 'lie_like_a_rug': #lie like a rug just changes EVERYTHING with no regard for the rest
-		#adversary prepares fake message
-		altered_message, changed = maybe_change_bracha_message(message, (False if value else True) if thisInstance['target_value'] is None else thisInstance['target_value'] ) #overwrite message, if possible. if we don't have a target, swap the bit of the message. If we do have a target, set the value to that.
-		if changed:
-			log("Changed message value to {}".format(altered_message['body'][2][0]))
-		log("Returning message.")
-		return_value_message(altered_message)
-		return
+	# if thisInstance['gameplan'] == 'lie_like_a_rug': #lie like a rug just changes EVERYTHING with no regard for the rest
+# 		#adversary prepares fake message
+# 		altered_message, changed = maybe_change_bracha_message(message, (False if value else True) if thisInstance['target_value'] is None else thisInstance['target_value'] ) #overwrite message, if possible. if we don't have a target, swap the bit of the message. If we do have a target, set the value to that.
+# 		if changed:
+# 			log("Changed message value to {}".format(altered_message['body'][2][0]))
+# 		log("Returning message.")
+# 		return_value_message(altered_message)
+# 		return
 	
 	#shaker, None, and lie_like_a_rug (bracha gameplans) do not use timing quotas, so we can skip setting them up.
 	
@@ -1190,24 +1193,33 @@ def process_message_client(message):
 			print "Release messages command: unknown byzID '{}'.".format(byzID)
 			MessageHandler.send("Received invalid release messages command: unknown byzID '{}'.".format(byzID), None,'client', type_override='announce')	
 			return
-			
-		if wave != 1 and wave != 2 and wave != 3:
+		
+		if wave is None:
+			wave = [1,2,3]	
+			print "Releasing messages for instance {}, all waves, by request.".format(byzID)	
+		elif wave != 1 and wave != 2 and wave != 3:
 			print "Release messages command: invalid wave#."
 			MessageHandler.send("Received invalid release messages command: wave {} doesn't exist.".format(wave), None,'client', type_override='announce')
 			return
+		else:
+			print "Releasing messages for instance {}, wave {}, by request.".format(byzID, wave)	
+			wave = [wave,]
 		
-		print "Releasing messages for instance {}, wave {} by request.".format(byzID, wave)
 		numreturned = 0
 		
-		for message_bucket in instances[byzID]['held_messages']['timing_holds'][wave]:
-			for message in instances[byzID]['held_messages']['timing_holds'][wave][message_bucket]:
-				numreturned += 1
-				return_timing_message(message, skip_log=True)
-		#now clear 'held' list
-		instances[byzID]['held_messages']['timing_holds'][wave] = {} 	
+		for thisWave in wave:
+			try:
+				for message_bucket in instances[byzID]['ei_storage'][epoch][iter]['held_messages']['timing_holds'][thisWave]:
+					for message in instances[byzID]['ei_storage'][epoch][iter]['held_messages']['timing_holds'][thisWave][message_bucket]:
+						numreturned += 1
+						return_timing_message(message, skip_log=True)
+				#now clear 'held' list
+				instances[byzID]['ei_storage'][epoch][iter]['held_messages']['timing_holds'][thisWave] = {} 	
+			except (KeyError,ValueError):
+				continue #silently handle bad information
 		
 		print "Returned {} messages.".format(numreturned)
-		MessageHandler.send("Returned {} messages for ID {}, wave {}.".format(numreturned,byzID,wave), None,'client', type_override='announce')
+		MessageHandler.send("Returned {} messages for ID {}.".format(numreturned,byzID), None,'client', type_override='announce')
 		
 
 def process_message_notify(message,thisInstance):	
@@ -1217,7 +1229,13 @@ def process_message_notify(message,thisInstance):
 	
 	if message['body'][1] == 'bracha_over': #end-of-bracha
 		log("Message from {}: done with Bracha.".format(get_message_sender(message)))
-		pass
+		
+		#If the adversary is not altering the coin flip, it still needs to cue corrupted nodes to send (fair) coin flips.
+		
+		if thisInstance['gameplan_coin'] is None and not thisIteration['adversary_column_plans_sent']:
+			thisIteration['adversary_column_plans_sent'] = True
+			simple_adversary_columns(thisIteration, None)
+		
 		#if node_is_overtaken(thisIteration['ID'],get_message_sender(message)):
 		#	thisIteration['nodes_done'][0] += 1
 		

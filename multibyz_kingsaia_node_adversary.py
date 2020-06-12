@@ -1226,7 +1226,7 @@ class ByzantineAgreement:
 					self.log("This node ({}) has exceeded the influence limit ({} vs limit of {}). Blacklisting.".format(node,abs(self.coinboardLogs[node][self.iteration]),5 * sqrt( self.num_nodes * log(self.num_nodes) )))
 					self.blacklistNode(node)
 				elif node in self.goodNodes: #otherwise, make sure it's good before logging - we don't include pre-blacklisted nodes in our count.
-						coinCount += self.coinboardLogs[node][self.iteration]
+					coinCount += self.coinboardLogs[node][self.iteration]
 			else:
 				#add log slots
 				self.coinboardLogs[node].extend([0 for _ in xrange(len(self.coinboardLogs[node]) - self.iteration + 1)])
@@ -1282,6 +1282,7 @@ class ByzantineAgreement:
 	def blacklistNode(self,sender):
 		self.log("Blacklisting node {}.".format(sender))
 		self.goodNodes.remove(sender)
+		self.badNodes.append(sender)
 		#blacklisted nodes have their coin flips submitted to globalCoin IGNORED.
 		#if we blacklist more than t nodes, we have a serious problem. What do we do then?
 		#is it possible to blacklist ourselves?
@@ -1479,7 +1480,7 @@ class ByzantineAgreement:
 		if sender in self.heldMessages['wave3_special']:
 			for message in self.heldMessages['wave3_special'][sender]:
 				#messages won't be returned to the wave 3 special hold bucket if this fn is triggered.
-				self.validateCoinMsg(message)
+				self.validateBrachaMsg(message)
 			del self.heldMessages['wave3_special'][sender]
 	
 	def checkHeldWaveMessages(self, wave):
@@ -2050,7 +2051,6 @@ def main(args):
 
 			if msgModeTemp == MessageMode.bracha:
 				thisInstance.validateBrachaMsg(adv_message)
-				#TODO call bracha message verify function
 			elif msgModeTemp == MessageMode.coin_flip or msgModeTemp == MessageMode.coin_list or msgModeTemp == MessageMode.coin_ack:
 				thisInstance.validateCoinMsg(adv_message)
 		

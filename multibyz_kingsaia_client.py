@@ -6,49 +6,20 @@ from sys import argv, exit
 from time import time #, sleep
 from string import split
 import random
-import multibyz_kingsaia_network as MessageHandler
+import threading
+import multibyz_kingsaia_network_adversary as MessageHandler
 #getting an error with the above line? 'pip install kombu'
 
-
-def main(args): #pylint: disable=too-many-locals, too-many-branches, too-many-statements
-	#args = a list of node names of everyone participating, followed by a custom username if any
-	print "Starting up..."
-	
-		
-	try:
-		random_generator = random.SystemRandom()
-	except NotImplementedError:
-		print "Couldn't initialize RNG. Check that your OS/device supports random.SystemRandom()."
-		exit()
-	
-	decision_IDs = {}
-	
-	with open(args[0]) as node_list:
-		all_nodes = [line.rstrip() for line in node_list]
-	
-	num_nodes = len(all_nodes)
-	fault_bound = (num_nodes - 1) // 3  #t < n/3. Not <=.
-
-	byz_ids_so_far = 0
-
-	
-	if len(args) > 1:
-		MessageHandler.init(args[1],"client")
-	else:
-		MessageHandler.init("client","client") #anonymous client
-		
-		last_message_time = time()	
-		
-	while True:	#pylint: disable=too-many-nested-blocks
-		print "Checking for messages."
+def check_for_messages_loop(timeout):
+	print "Checking for messages."
 		while True:
-			if time() - last_message_time >= 5:
-				break #if we've been processing messages for 5 seconds straight, pause to give control to the user
-			message = MessageHandler.receive_next()
+			#if time() - last_message_time >= 5:
+			#	break #if we've been processing messages for 5 seconds straight, pause to give control to the user
+			#message = MessageHandler.receive_next()
 			if message is None:
 				#weSaidNoMessages = True
-				break
-				#sleep(1) #wait a second before we check again.
+				#break
+				sleep(timeout) #wait a second before we check again.
 			else:
 				#weSaidNoMessages = False
 				
@@ -98,11 +69,42 @@ def main(args): #pylint: disable=too-many-locals, too-many-branches, too-many-st
 					print "Unknown message received."
 					print repr(message)
 					#malformed headers! Throw an error? Drop? Request resend?
+	
+
+
+def main(args): #pylint: disable=too-many-locals, too-many-branches, too-many-statements
+	#args = a list of node names of everyone participating, followed by a custom username if any
+	print "Starting up..."
+	
 		
-				
+	try:
+		random_generator = random.SystemRandom()
+	except NotImplementedError:
+		print "Couldn't initialize RNG. Check that your OS/device supports random.SystemRandom()."
+		exit()
+	
+	decision_IDs = {}
+	
+	with open(args[0]) as node_list:
+		all_nodes = [line.rstrip() for line in node_list]
+	
+	num_nodes = len(all_nodes)
+	fault_bound = (num_nodes - 1) // 3  #t < n/3. Not <=.
+
+	byz_ids_so_far = 0
+	
+	if len(args) > 1:
+		MessageHandler.init(args[1],"client")
+	else:
+		MessageHandler.init("client","client") #anonymous client
+		
+	receive_thread = threading.Thread(target=check_for_messages_loop, args=(5,))
+	receive_thread.daemon = True #background thread - cleared when program exits without needing to stop it manually
+	receive_thread.start()	#message receipt will now happen in the background
+		
+	while True:	#pylint: disable=too-many-nested-blocks		
 		try:
 			message = raw_input("Ready > ")
-			last_message_time = time()
 			if message != "":
 				try:
 					input_split = split(message," ",1)
