@@ -157,9 +157,12 @@ The functions in that file are as follows:
 * `receive_backchannel()` - Used by nodes and the adversary to receive the next adversarial-business-related message sent to them.
 * `receive_next()` - Used by nodes to receive the next message sent to them.
 
+Once that's done, I recommend:
 
-
-
+* Each node should be run on a different computer. 
+* The message-sending server (if you have one) should be run on the same computer as the adversary. The adversary effectively MITMs every message, so expect it to get a lot of traffic!
+* The runner as it currently exists won't work. You'll have to make a new runner or start/stop each node separately.
+* The client can be anywhere.
 
 ### Customizing *t*
 
