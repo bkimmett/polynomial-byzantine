@@ -153,7 +153,7 @@ class ReliableBroadcast: # pylint: disable=no-init
 		
 		#adversary intervenes and possibly alters value first
 		MessageHandler.sendToAdversary(message,{'phase':thisClass.RBPhase.initial,'rbid':(username,message_counter,extraMeta)})
-		#MessageHandler.sendAll(message,{'phase':thisClass.RBPhase.initial,'rbid':(username,message_counter,extraMeta)})
+		#MessageHandler.sendAll(message,{'phase':thisClass.RBPhase.initial,'rbid':(username,message_counter,extraMeta)},all_nodes)
 		
 		thisClass.log("SENDING INITIAL reliable broadcast message for key < {} > to all.".format(repr(message)))
 		message_counter += 1
@@ -282,14 +282,14 @@ class ReliableBroadcast: # pylint: disable=no-init
 		#no, we want floats here. >= will cover for a lot of float-related and fractional-part issues with thresholds.
 		
 		#BROADCAST FORMAT:
-		#MessageHandler.sendAll(message,{'phase':RBPhase.initial,'rbid':(username,message_counter,extraMeta)})
+		#MessageHandler.sendAll(message,{'phase':RBPhase.initial,'rbid':(username,message_counter,extraMeta)},all_nodes)
 					
 		if thisClass.broadcasting_echoes[uid][3] == thisClass.RBPhase.initial:
 			#waiting to send echo
 			if thisClass.broadcasting_echoes[uid][0] or len(thisClass.broadcasting_echoes[uid][1]) >= (thisClass.num_nodes + thisClass.fault_bound) / 2 or len(thisClass.broadcasting_echoes[uid][2]) >= thisClass.fault_bound + 1: #one initial OR (n+t)/2 echoes OR t+1 readies
 				#ECHO!
 				thisClass.log("SENDING ECHO reliable broadcast message for key < {} > to all.".format(repr(data)))
-				MessageHandler.sendAll(data,{'phase':thisClass.RBPhase.echo,'rbid':meta['rbid']})
+				MessageHandler.sendAll(data,{'phase':thisClass.RBPhase.echo,'rbid':meta['rbid']},all_nodes)
 				#MessageHandler.sendAll(("rBroadcast","echo",data,None)) 
 				#4th item in message is debug info
 				thisClass.broadcasting_echoes[uid][3] = thisClass.RBPhase.echo #update node phase
@@ -301,7 +301,7 @@ class ReliableBroadcast: # pylint: disable=no-init
 			if len(thisClass.broadcasting_echoes[uid][1]) >= (thisClass.num_nodes + thisClass.fault_bound) / 2 or len(thisClass.broadcasting_echoes[uid][2]) >= thisClass.fault_bound + 1: #(n+t)/2 echoes OR t+1 readies
 				#READY!
 				thisClass.log("SENDING READY reliable broadcast message for key < {} > to all.".format(repr(data)))
-				MessageHandler.sendAll(data,{'phase':thisClass.RBPhase.ready,'rbid':meta['rbid']})
+				MessageHandler.sendAll(data,{'phase':thisClass.RBPhase.ready,'rbid':meta['rbid']},all_nodes)
 				#MessageHandler.sendAll(("rBroadcast","ready",data,None)) #message format: type, [phase, data, debuginfo]
 				thisClass.broadcasting_echoes[uid][3] = thisClass.RBPhase.ready #update node phase
 			else:
@@ -1872,7 +1872,7 @@ class ByzantineAgreement:
 		#self._decide(True if deciding_value == 1 else False)
 		self.decided = True
 		self.decision = value #should be boolean  #True if value == 1 else False	
-		MessageHandler.sendAll(self.decision,self.ID,"decide") #type override
+		MessageHandler.sendAll(self.decision,self.ID,type_override="decide",all_nodes) #type override
 		
 		#TODO: Notify decision here.
 		

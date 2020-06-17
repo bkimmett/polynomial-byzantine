@@ -29,7 +29,7 @@ defer_in_unwinnable_situations = False
 #By default, if all good nodes are unanimous, the adversary knows it can't do anything so it'll give up. Set this to 'False' to have the adversary try to still intervene if all good nodes are unanimous anyway. This could be used when testing bracha, for example.
 
 instances = {}
-current_master_gameplan_bracha = None
+current_master_gameplan_bracha = None #adversary's default behaviors on startup
 current_master_gameplan_coin = None
 
 default_target = False
@@ -411,7 +411,7 @@ def return_timing_message(message, skip_log=False):
 	MessageHandler.sendAsAdversary(message['body'],message['meta'],message['sender'])
 	
 def return_value_message(message):
-	MessageHandler.adversaryBroadcast(message['body'],message['meta'],sender=message['sender'])
+	MessageHandler.adversaryBroadcast(message['body'],message['meta'],all_nodes,sender=message['sender'])
 
 
 def hold_message(message,key):

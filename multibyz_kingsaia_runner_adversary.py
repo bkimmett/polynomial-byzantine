@@ -50,7 +50,7 @@ def main(args):
 	
 		#halt all
 	MessageHandler.init("HaltHandler","halt") #anonymous client
-	MessageHandler.sendAll(None,None) #send empty halt message
+	MessageHandler.sendAll(None,None,node_names) #send empty halt message
 	MessageHandler.sendToAdversary(None,None) #and your little adversary too!
 	
 		#halt server also needs to be done manually. Or you can leave it up for when you go again.

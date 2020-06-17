@@ -117,7 +117,7 @@ def main(args): #pylint: disable=too-many-locals, too-many-branches, too-many-st
 						#send format: message, meta, dest
 						print "Message sent to {}.".format(dest)
 					elif command == "msgall":
-						MessageHandler.sendAll(message2,{'code':'message'})
+						MessageHandler.sendAll(message2,{'code':'message'},all_nodes)
 						#send format: message, meta
 						print "Message sent to everyone."
 					elif command == "rb":

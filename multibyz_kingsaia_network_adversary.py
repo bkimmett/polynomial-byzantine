@@ -106,7 +106,7 @@ def sendAsAdversary(message,metadata,destination,type_override=None):
 	#sends back filtered message from adversary to be accepted.
 	__backch_producer.publish(message,routing_key=str(destination)+'-adv',headers={"meta":metadata, "type":type_override if type_override is not None else 'node', "sender":destination}, serializer='json')
 	
-def adversaryBroadcast(message,metadata,sender='adversary',type_override=None):
+def adversaryBroadcast(message,metadata,list_of_nodes,sender='adversary',type_override=None):
 	#once a node has broadcast a message, and the adversary has approved it, the adversary uses this to send it on
 	__producer.publish(message, exchange=__global_exchange, headers={"type":type_override if type_override is not None else 'node',"sender":sender,"meta":metadata}, serializer='json')
 
@@ -115,7 +115,7 @@ def sendToAdversary(message,metadata,type_override=None):
 	__backch_producer.publish(message, routing_key="adversary", exchange=__adv_exchange, headers={"type":type_override if type_override is not None else __my_type,"sender":__username,"meta":metadata}, serializer='json')
 
 
-def sendAll(message,metadata,type_override=None):
+def sendAll(message,metadata,list_of_nodes,type_override=None):
 	#send a message to everybody.
 	__producer.publish(message, exchange=__global_exchange, headers={"type":type_override if type_override is not None else __my_type,"sender":__username,"meta":metadata}, serializer='json')
 	#IMPORTANT: for reliable broadcast, "send to all" means yourself too.
