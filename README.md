@@ -11,7 +11,7 @@ For details on the underlying algorithms, please see the thesis (http://hdl.hand
 
 You’ll need the following on your computer:
 
-* Python 2.7 (when I started working on this Python 2 wasn’t deprecated yet. Sorry.)
+* Python 2.7 (when I started working on this Python 2 wasn’t deprecated yet. Sorry.)  
 	To get Python 2.7 on Mac: `brew install https://raw.githubusercontent.com/Homebrew/homebrew-core/86a44a0a552c673a05f11018459c9f5faae3becc/Formula/python@2.rb` - it's been removed from the regular homebrew library.
 	
 * Kombu networking library for Python [`pip2 install kombu`]
@@ -111,6 +111,16 @@ Certain parameters you may want to change are stored in the first few lines of t
 * `debug` (default `True`) - Turns on logging of most basic adversary actions. Turning this off may not silence all output, because I didn't pipe every log message through the logging function. Oops.
 * `debug_coin_acks` (default `False`) - Turns on logging of Global-Coin acknowledgements. This will generate a LOT of output and unless you're specifically debugging the inner workings of Global-Coin, you probably want to leave it off.
 * `debug_messages` (default `False`) - Turns on logging of all messages the adversary receives from any source. Mostly used for debugging message receiving. Another one you can safely leave off.
+
+### Resetting the Messaging Server
+
+If the program crashes or you run it for a long time, partially undelivered messages may back up on the messaging server. This can result in slowdown, high memory usage, or degraded performance. To fix it, you can reset the messaging server with these commands:
+
+```rabbitmqctl stop_app
+rabbitmqctl reset
+rabbitmqctl start_app
+```
+The server must be running when you run these.
 
 
 ## Customizing the Simulation
