@@ -115,7 +115,7 @@ Certain parameters you may want to change are stored in the first few lines of t
 
 ## Customizing the Simulation
 
-
+(This section is incomplete and still being written.)
 
 ### Program Structure
 
