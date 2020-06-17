@@ -34,7 +34,8 @@ To get started in a hurry:
 
 6. In a third command prompt, run the adversary: `python ./multibyz_kingsaia_adversary.py multibyz_kingsaia_nodenames > logs/log_adversary.txt`. 
 
-7. You can now send commands to the system from the command prompt that has the client (see below for a list of commands). To stop the system, type `halt` in the command prompt, or use Ctrl-C. The client will ensure everything properly shuts down, including the adversary.
+7. You can now send commands to the system from the command prompt that has the client (see below for a list of commands). To stop the system, type `halt` in the command prompt, or use Ctrl-C. The client will ensure everything properly shuts down, including the adversary.  
+(I don't recommend doing anything else CPU-intensive while running commands. This program will take up as much CPU as it can on the computer when the simulation is run on a single machine.)
 
 8. Logs are stored in the `logs/` folder. Each node logs to a text file automatically. The adversary command shown above redirects its output (normally to stdout) into a text file, instead.
 
@@ -116,7 +117,8 @@ Certain parameters you may want to change are stored in the first few lines of t
 
 If the program crashes or you run it for a long time, partially undelivered messages may back up on the messaging server. This can result in slowdown, high memory usage, or degraded performance. To fix it, you can reset the messaging server with these commands:
 
-```rabbitmqctl stop_app
+```
+rabbitmqctl stop_app
 rabbitmqctl reset
 rabbitmqctl start_app
 ```
@@ -129,6 +131,12 @@ The server must be running when you run these.
 
 ### Program Structure
 
+The program is split into the following components:
+
+* The **nodes** (`multibyz_kingsaia_node_adversary.py`) run Byzantine agreement, reliable broadcast, and Global-Coin. Each node runs as a separate Python process.
+* The **adversary** (`multibyz_kingsaia_adversary.py`) attempts to interfere with the process.
+* The **client** (`multibyz_kingsaia_client_adversary.py`) tells nodes when to run Byzantine agreement instances. It also tells the adversary what to do, and basically lets the experimenter control the system.
+* The **runner** (`multibyz_kingsaia_runner_adversary.py`) provides an easy way to set up and run the system on a single computer, as well as handle graceful shutdowns.
 
 ### Networking Between Processes And How to Make it Distributed
 
@@ -142,8 +150,18 @@ The functions in that file are as follows:
 * `init_adversary()` - Used to set up the adversary's connection.
 * `shutdown()` - Used to close connections for all parties.
 * `send()` - Used to send messages to one other party.
-* `sendAsAdversary()` - Used by the adversary to release a message a node was going to accept after it was going to hold it.
+* `sendAsAdversary()` - Used by the adversary to release a message that a node was about to accept, and the adversary either decided not to hold or released after holding.
+* `sendToAdversary()` - Used by nodes in place of broadcasting a message. The message is sent to the adversary, in case the adversary decides to corrupt that node now.
+* `adversaryBroadcast()` - Used by the adversary to complete the broadcast of a message that a node was about to broadcast.
+* `sendAll()` - Used to send messages to everyone.
+* `receive_backchannel()` - Used by nodes and the adversary to receive the next adversarial-business-related message sent to them.
+* `receive_next()` - Used by nodes to receive the next message sent to them.
 
+
+
+
+
+### Customizing *t*
 
 ### Implementing Process-Epoch
 
