@@ -171,5 +171,28 @@ Once that's done, I recommend:
 
 ### Adding New Adversary Behaviors
 
+The adversary is able to act in the following ways:
 
+#### Outgoing Messages 
+
+##### Outgoing: Modified-Bracha
+
+When a node is about to reliably broadcast a Modified-Bracha message, it will send that message to the adversary. The message will then be passed to `process_bracha_message_value()`. This message must always be sent on eventually (with `return_value_message()`, which calls `adversaryBroadcast()`) unless the adversary decides to corrupt the sending node (see `send_node_gameplans()` for how the adversary does this).   
+The current set of Modified-Bracha adversary behaviors hold all Wave 1 Bracha messages until each node has broadcast one, then decides to corrupt nodes at that time. It then releases all the messages.
+
+For Modified-Bracha, corrupted nodes are sent instructions in the format `[wave_1, wave_2, wave_3]`, where `wave_1` and `wave_2` are `True`, `False`, or `None`. This represents the value the corrupted node is to broadcast during waves 1 and 2 of Modified-Bracha. `None` means, "Do what a good node would do". The value of `wave_3` is either `None` or a tuple of boolean values: the first controls what value to broadcast in Wave 3, and the second controls whether to emit the deciding flag. So, `(True,False)` for `wave_3` means, "Broadcast the value True, but don't broadcast the deciding flag." If either value in the tuple is replaced with `None`, the corrupted node will act as if it were a good node in that respect.
+
+The adversary can simulate a crash fault by corrupting a node, discarding its messages, and sending no instructions.
+
+##### Outgoing: Global-Coin
+
+In the case of a Global-Coin message, the adversary receives the message in `process_coin_message_value()` instead. Like with Modified-Bracha messages, the message must always be sent on eventually unless the adversary corrupts the sending node.
+
+For Global-Coin, corrupted nodes are sent instructions through the function `simple_adversary_columns()`, though other functions could be added.
+
+#### Incoming Messages
+
+##### Incoming: Modified-Bracha
+
+When a node is about to accept a reliable broadcast message, it will send that message to the adversar
 
