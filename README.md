@@ -102,7 +102,7 @@ Certain parameters you may want to change are stored in the first few lines of t
 * `debug_rb_accept` (default `True`) - Prints out all reliable broadcast messages a node accepts. Technically prints twice - once before a message is filtered by the adversary, and once after it comes back. This is the easy way to keep tabs on all messages a node receives.
 * `debug_byz` (default `True`) - Prints out various logging messages relating to the state of the byzantine agreement instance in general, and Modified-Bracha in particular. Probably best kept on.
 * `debug_show_coinboards` (default `True`) - Once a node's view of the blackboard is complete, the node will print it.
-
+* `default_target` (default `False`) - The adversary will try to promote this value as its chosen value. Note that the simulation was mostly tested with 'False' as the default. In the event of unexpected behavior, please contact me (see below).
 
 **In `multibyz_kingsaia_adversary.py`:**
 
@@ -166,8 +166,15 @@ Once that's done, I recommend:
 
 ### Customizing *t*
 
+The maximum number of nodes the adversary can take over is stored as the variable `fault_bound` in all scripts. In the node script (`multibyz_kingsaia_node_adversary.py`), it's set in three different places; once in the `main()` function once during the ReliableBroadcast instance's `initial_setup()` function, and a third time during the ByzantineAgreement instance's `__init__()` function. The last two are actually used in the program (for reliable broadcast and byzantine agreement, respectively).
+
+In the adversary (`multibyz_kingsaia_adversary.py`), `fault_bound` is set only once, in the `main()` function, and used for all instance of byzantine agreement. 
+
+In the client (`multibyz_kingsaia_client_adversary.py`), `fault_bound` is set only once, in the `main()` function. It's used to let the client determine when good nodes have decided on a value.
+
 ### Implementing Process-Epoch
 
+TODO
 
 ### Adding New Adversary Behaviors
 
@@ -194,5 +201,14 @@ For Global-Coin, corrupted nodes are sent instructions through the function `sim
 
 ##### Incoming: Modified-Bracha
 
-When a node is about to accept a reliable broadcast message, it will send that message to the adversar
+When a node is about to accept a reliable broadcast message, it will send that message to the adversary; the adversary will receive it with `process_bracha_message_timing()`. The adversary must send the message on eventually, with `return_timing_message()`.
 
+Because of the large number of accept messages that are generated, the adversary provides a quota system TODO 
+
+##### Incoming: Global-Coin
+
+TODO
+
+## Contact
+
+If there's trouble, or if you have questions, contact me at b-l-k at u-v-i-c dot c-a (but take the dashes out first).
