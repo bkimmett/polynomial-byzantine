@@ -921,7 +921,7 @@ def handle_bias_adversary_turn(thisIteration):
 
 def simple_adversary_columns(thisIteration,amount):
 
-	#this function sets the adversary columns to broadcast coin flips that sum to this amount. 'None' is "do whatever".
+	#this function sets the adversary columns to broadcast coin flips that sum to this amount. 'None' is "flip a fair coin".
 	if amount is None:
 		log("Coin gameplan for this iteration: None. Adversarial nodes act randomly.".format(amount))
 		for node in get_nodes_overtaken(thisIteration):

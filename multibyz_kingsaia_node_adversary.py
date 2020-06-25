@@ -7,7 +7,7 @@ from sys import argv, exit, stdout, exc_info 		#utility
 from time import sleep, strftime 	#to wait for messages, and for logging
 from math import floor, sqrt, log 			#utility
 from copy import deepcopy 		#utility
-#import numpy as np 				#for matrix operations in _processEpoch
+import numpy as np 				#for matrix operations in _processEpoch
 from json import dumps			#for making UIDs good
 import traceback 				#debugging
 import collections				#for data type checking of messages
@@ -1845,7 +1845,9 @@ class ByzantineAgreement:
 		
 		
 		
-	
+		#######
+		####### Ignore everything in this function block below this point. This was for the expected-polynomial version of Process-Epoch.
+		####### 
 	
 		#TODO
 		#SO here's what we're gonna do.
