@@ -203,7 +203,13 @@ For Global-Coin, corrupted nodes are sent instructions through the function `sim
 
 When a node is about to accept a reliable broadcast message, it will send that message to the adversary; the adversary will receive it with `process_bracha_message_timing()`. The adversary must send the message on eventually, with `return_timing_message()`.
 
-Because of the large number of accept messages that are generated, the adversary provides a quota system TODO 
+Because of the large number of accept messages that are generated, the adversary provides a quota system. Quotas are generated in `setup_quotas()`, and stored in the variable `quota_list`. `quota_list[1]`, `quota_list[2]`, and `quota_list[3]` are dictionaries which store quotas organized by each individual node's name, for Modified-Bracha Waves 1, 2, and 3 respectively.
+
+Quotas for Waves 1 and 2 are of the format `[messages_False, messages_True]`. `messages_False` represents the number of messages of that wave with the value `False` that the adversary will let that node accept (as opposed to holding the message). `messages_True` represents the number of messages of that wave with the value `True` that the adversary will let that node accept.
+
+Quotas for Wave 3 are of the format `[messages_deciding_False, messages_deciding_True]`. `messages_False` represents the number of messages of that wave that the adversary will let that node accept, where the `decide` flag is not set. `messages_True` represents the number of messages with the `decide` flag set that the adversary will let that node accept.
+
+Note that the adversary won't hold an incoming message that's about to be accepted by the same node that sent it. This is because it's assumed that the node has already noted down the result of this messages. Quotas will be auto-adjusted internally to account for this.
 
 ##### Incoming: Global-Coin
 
