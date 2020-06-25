@@ -14,6 +14,7 @@ You’ll need the following on your computer:
 * Python 2.7 (when I started working on this Python 2 wasn’t deprecated yet. Sorry.)  
 	To get Python 2.7 on Mac: `brew install https://raw.githubusercontent.com/Homebrew/homebrew-core/86a44a0a552c673a05f11018459c9f5faae3becc/Formula/python@2.rb` - it's been removed from the regular homebrew library.
 	
+* numpy (for Process-Epoch matrix handling) [`pip2 install numpy`]
 * Kombu networking library for Python [`pip2 install kombu`]
 * blist large-list library [`pip2 install blist`] 
 * RabbitMQ messaging server (https://www.rabbitmq.com/)
@@ -89,7 +90,7 @@ You can tell the adversary to use these behaviors with the `adv` command.
 * `none` - Do nothing.
 * `bias` - Bias the shared coin flip in the adversary's chosen direction.
 * `bias_reverse` - Bias the shared coin flip in the direction opposite the adversary's chosen direction. Used for the 'Deadlock' attack.
-* `split` - Split the shared coin flip, so different nodes will see different results. **Not tested, may not work.** Use at own risk.
+* `split` - Split the shared coin flip, so different nodes will see different results. **Not currently implemented.**
 
 ## Changing Basic Parameters (Logging, Adversary Chosen Value, Adversary Message Holding)
 
@@ -174,7 +175,11 @@ In the client (`multibyz_kingsaia_client_adversary.py`), `fault_bound` is set on
 
 ### Implementing Process-Epoch
 
-TODO
+Process-Epoch (which identifies probably-adversarial nodes to be ignored) is called in nodes at the end of an epoch, as `_processEpoch()`. It's not fully implemented yet (it gets about to the point of generating the matrix `M_p` for King and Saia's Algorithm 7), but there are a lot of notes in comments that should help. The node tracks the sign of the sum of each blackboard in the variable `self.epochFlips`, and logs for each epoch's blackboard (broken down by node and iteration) are initially stored in `self.coinboardLogs` and then moved into `self.pastCoinboardLogs` at the end of an epoch. 
+
+What Process-Epoch is supposed to do is blacklist nodes it deems unsuitable by calling `self.blacklistNode()` with the ID of the node in question. Note that as things currently stand, blacklisting too many nodes (more than _t_) will cause a node to reset and start a new set of epochs immediately. I don't know whether this is good practice or not (I suspect not - the node needs to still participate in older epochs, probably). Blacklisted nodes have their results ignored when summing the blackboard for the result of Global-Coin.
+
+I recommend implementing the exponential version of Process-Epoch - the expected-polynomial version has a resilience of  about _t_ < _n_/1000000. A trivial algorithm for exponential Process-Epoch is easy (try every combination of iterations and nodes). An efficient exponential algorithm is left as an exercise for the reader. Good luck!
 
 ### Adding New Adversary Behaviors
 
@@ -201,7 +206,7 @@ For Global-Coin, corrupted nodes are sent instructions through the function `sim
 
 ##### Incoming: Modified-Bracha
 
-When a node is about to accept a reliable broadcast message, it will send that message to the adversary; the adversary will receive it with `process_bracha_message_timing()`. The adversary must send the message on eventually, with `return_timing_message()`.
+When a node is about to accept a reliable broadcast Modified-Bracha message, it will send that message to the adversary; the adversary will receive it with `process_bracha_message_timing()`. The adversary must send the message on eventually, with `return_timing_message()`.
 
 Because of the large number of accept messages that are generated, the adversary provides a quota system. Quotas are generated in `setup_quotas()`, and stored in the variable `quota_list`. `quota_list[1]`, `quota_list[2]`, and `quota_list[3]` are dictionaries which store quotas organized by each individual node's name, for Modified-Bracha Waves 1, 2, and 3 respectively.
 
@@ -213,7 +218,9 @@ Note that the adversary won't hold an incoming message that's about to be accept
 
 ##### Incoming: Global-Coin
 
-TODO
+When a node is about to accept a reliable broadcast Global-Coin message, it will send that message to the adversary; the adversary will receive it with `process_coin_message_timing()`. The adversary must send the message on eventually, with `return_timing_message()`.
+
+Currently, no adversarial behaviors alter Global-Coin message acceptance, so no functionality for it is in the code. This functionality would have to be added.
 
 ## Contact
 
