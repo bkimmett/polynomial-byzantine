@@ -25,7 +25,7 @@ from multibyz_kingsaia_node_adversary import MessageMode
 # All of the communications of the implementation use Reliable Broadcast. Which is remarkably difficult to interfere with... which is kind of the point. So, to simulate it, we have each node add an extra step before it accepts a Reliable Broadcast message.
 # The extra step is: the node sends its ID, along with the message it was about to accept, to the simulated adversary. The simulated adversary can choose to return it now (indicating no delay), return it later (indicating delay), or change it (which means the adversary has taken over the original sender of the node and now can broadcast whatever it wants, but is pretending to be normal)
 
-defer_in_unwinnable_situations = False
+defer_in_unwinnable_situations = True
 #By default, if all good nodes are unanimous, the adversary knows it can't do anything so it'll give up. Set this to 'False' to have the adversary try to still intervene if all good nodes are unanimous anyway. This could be used when testing bracha, for example.
 
 instances = {}

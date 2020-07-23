@@ -377,8 +377,8 @@ class MessageMode: # pylint: disable=no-init,too-few-public-methods
 class ByzantineAgreement:
 	__byzantine_list__ = {} #stores list of instance objects. This is pretty much the node's entire records.
 	
-	def log(self,message):
-		if debug_byz:
+	def log(self,message,always_show=False):
+		if debug_byz or always_show:
 			global username
 			print "[{}:{}:{}] {}".format(strftime("%H:%M:%S"),username,self.ID,message)
 	
@@ -1214,8 +1214,8 @@ class ByzantineAgreement:
 		
 		if debug_show_coinboards:
 			#show coinboard, but without acknowledgements
-			self.log("Coinboard = {}".format([{node : val[0] for node, val in flipLine.iteritems()} for flipLine in self.coinboard]))
-			self.log("Coinboard Logs = {}".format(self.coinboardLogs))
+			self.log("Coinboard = {}".format([{node : val[0] for node, val in flipLine.iteritems()} for flipLine in self.coinboard]),always_show=True)
+			self.log("Coinboard Logs = {}".format(self.coinboardLogs),always_show=True)
 		
 		#TODO: When do we generate the numpy array? Or whatever we're using for Process-Epoch.
 		for node in self.coinboardLogs:
@@ -1874,7 +1874,7 @@ class ByzantineAgreement:
 		#self._decide(True if deciding_value == 1 else False)
 		self.decided = True
 		self.decision = value #should be boolean  #True if value == 1 else False	
-		MessageHandler.sendAll(self.decision,self.ID,type_override="decide",all_nodes) #type override
+		MessageHandler.sendAll(self.decision,self.ID,all_nodes,type_override="decide") #type override
 		
 		#TODO: Notify decision here.
 		
