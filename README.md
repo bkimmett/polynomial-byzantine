@@ -29,7 +29,7 @@ To get started in a hurry:
 
 3. In a command prompt, run the messaging server: `rabbitmq-server`. This window needs to stay open for as long as the program is running.
 
-4. In another command prompt (in the folder where the files are), run the runner, which starts and stops (most of) the other parts of the program: `python multibyz_kingsaia_runner_adversary.py <num_nodes>`. The slot where `<num_nodes>` is should have an integer in it: the number of total nodes to run. The runner will start all nodes, as well as the client, and drop you in the client.
+4. In another command prompt (in the folder where the files are), run the runner, which starts and stops (most of) the other parts of the program: `python multibyz_kingsaia_runner_adversary.py <num_nodes>`. The slot where `<num_nodes>` is should have an integer in it: the number of total nodes to run. (**I _strongly recommend_ running the program with no more than 10 nodes, by default.**) The runner will start all nodes, as well as the client, and drop you in the client.
 
 5. The runner will create a file, `multibyz_kingsaia_nodenames`, with the names of the running nodes.
 
