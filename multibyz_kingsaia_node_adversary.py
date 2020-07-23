@@ -2065,7 +2065,6 @@ def main(args):
 				weSaidNoMessages = True
 			sleep(1) #wait a second before we check again.
 		else:
-			weSaidNoMessages = False
 			#print message.headers
 			#print message.body
 
@@ -2073,6 +2072,7 @@ def main(args):
 
 			
 			if message['type'] == "client":
+				weSaidNoMessages = False
 				#TODO - client messages.
 				code = message['meta']['code']
 				if code == "broadcast":
@@ -2133,9 +2133,11 @@ def main(args):
 # 							print "Accepted reliable broadcast from {}: {}".format(message['meta']['rbid'][0],message['body'])
 							
 				else:
+					weSaidNoMessages = False
 					print "Unknown node message received."
 					print repr(message) #TODO: throw error on junk message. Or just drop it.
 			elif message['type'] == "adversary_command":
+				weSaidNoMessages = False
 				#adversarial override - TO DO
 				if message['body'][0] == "gameplan_bracha" or message['body'][0] == "gameplan_coin":
 					thisInstance = ByzantineAgreement.getInstance(message['body'][1])
