@@ -107,7 +107,7 @@ Certain parameters you may want to change are stored in the first few lines of t
 
 **In `multibyz_kingsaia_adversary.py`:**
 
-* `defer_in_unwinnable_situations` (default `True`) - For ease of automated use, the adversary can detect iterations when all good nodes start unanimous, and automatically release held Modified-Bracha messages in these circumstances (as the adversary wouldn't be able to influence the iteration anyway - see **CITE Bracha 1987a**). This auto-release will happen if this variable is set to `True`, and not if it is False.
+* `defer_in_unwinnable_situations` (default `True`) - For ease of automated use, the adversary can detect iterations when all good nodes start unanimous, and automatically release held Modified-Bracha messages in these circumstances (as the adversary wouldn't be able to influence the iteration anyway - see Bracha 1987 (https://doi.org/10.1016/0890-5401(87)90054-X)). This auto-release will happen if this variable is set to `True`, and not if it is False.
 * `default_target` (default `False`) - This is the adversary's chosen value. If you want the adversary to try and push `True`, set this to `True` instead.
 * `known_bracha_gameplans` and `known_coin_gameplans` - These are the behaviors the adversary knows about. If you want to add a new behavior (see below), add its name to this list so that the adversary knows it's a valid one.
 * `debug` (default `True`) - Turns on logging of most basic adversary actions. Turning this off may not silence all output, because I didn't pipe every log message through the logging function. Oops.
@@ -127,8 +127,6 @@ The server must be running when you run these.
 
 
 ## Customizing the Simulation
-
-(This section is incomplete and still being written.)
 
 ### Program Structure
 
